@@ -1,3 +1,28 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "assure-package-cleaner"
+version = "0.1.0"
+description = "Deletes stale packages from the Spectra Assure portal based on a configurable retention period"
+requires-python = ">=3.12"
+license = "MIT"
+dependencies = [
+  "requests>=2.31",
+]
+
+[project.optional-dependencies]
+dev = [
+  "ruff>=0.4",
+  "mypy>=1.10",
+  "pytest>=8.0",
+  "types-requests>=2.31",
+]
+
+[project.scripts]
+assure-package-cleaner = "assure_package_cleaner.__main__:main"
+
 [tool.ruff]
 target-version = "py312"
 line-length = 100

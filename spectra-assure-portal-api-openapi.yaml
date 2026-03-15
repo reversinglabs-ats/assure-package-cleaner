@@ -1,0 +1,3552 @@
+openapi: 3.0.3
+info:
+  title: ReversingLabs Spectra Assure Portal API
+  version: '1.0'
+  contact:
+    name: ReversingLabs Support
+    url: https://www.reversinglabs.com/
+    email: support@reversinglabs.com
+  license:
+    name: Proprietary
+    url: https://www.reversinglabs.com/hubfs/ReversingLabs_MLSA.pdf
+  description:
+    $ref: ./_intro.md
+servers:
+  - url: https://{portalUrl}/api/public/v1
+    variables:
+      portalUrl:
+        description: URL of the Portal instance that you want to access from the API. By default, the Portal instance will be a subdirectory of `my.secure.software`. Depending on your region, replace `my` with one of the following - `ca` (for Canada), `us` (for USA; interchangeable with `my`).
+        default: my.secure.software/example
+        enum:
+          - my.secure.software/example
+          - ca.secure.software/example
+          - us.secure.software/example
+security:
+  - TokenAuthentication: []
+tags:
+  - name: Version
+    description: '**Endpoints in this category help you work with software package versions in your Portal projects.**'
+  - name: Project
+    description: '**Endpoints in this category help you manage your projects in the Portal.**'
+  - name: Package
+    description: '**Endpoints in this category help you manage software packages in your Portal projects.**'
+  - name: Group
+    description: '**Endpoints in this category make it easier to work with groups in the Portal.**'
+  - name: Approval
+    description: |-
+      **Endpoints in this category help you manage the approval status for software package versions in the Portal.**
+
+      The following table explains which approval flows are supported by these API endpoints.
+
+      | Approval flow | API | Details |
+      | --------- | :---: | ---- |
+      | Approval Pending -> Approved  | ✔️ | By default, all package versions await approval and can be approved. |
+      | Approval Pending -> Rejected | ✔️ | By default, all package versions await approval and can be rejected. |
+      | Approval Pending -> Revoked | ❌ | There is nothing to revoke if the package version has not been approved yet. |
+      | Approved -> Revoked | ✔️ | A previously approved package version can have its approval status revoked. |
+      | Approved -> Rejected | ❌ | Contradictory action; use the revoke option instead. |
+      | Approved -> Approval Pending | ❌ | Approval status cannot be reset to the initial (undetermined) state. |
+      | Rejected -> Approved | ✔️ | A previously rejected package version can be approved. |
+      | Rejected -> Revoked | ❌ | There is nothing to revoke if the package version is not approved. |
+      | Rejected -> Approval Pending | ❌ | Approval status cannot be reset to the initial (undetermined) state. |
+      | Revoked -> Approved | ❌ | Revoked package versions cannot be approved again. |
+      | Revoked -> Rejected | ❌ | Revoked package versions cannot be rejected. |
+      | Revoked -> Approval Pending | ❌ | Approval status cannot be reset to the initial (undetermined) state. |
+  - name: Community
+    description: |-
+      **Endpoints in this category let you interact with Spectra Assure Community.**
+
+      ReversingLabs [Spectra Assure Community](https://docs.secure.software/community/) is a free-to-use SaaS platform where software developers, DevOps engineers, and IT security specialists can check the security status of widely distributed developer tools and open source software packages from the most popular communities. The contents of these software package and developer tool repositories are continually analyzed by ReversingLabs with the latest findings immediately available on the Spectra Assure Community website.
+
+      The Spectra Assure Community API is an extension of the Community platform and a companion solution to the free SaaS tool.
+      It allows you to automate common actions; specifically, searching for packages and retrieving information about individual software packages and their versions.
+
+      These endpoints are also available to Spectra Intelligence customers as part of the [TCA-0701 API](https://docs.reversinglabs.com/SpectraIntelligence/API-reference/#tag/Supply-Chain-Security).
+  - name: Profile
+    description: |-
+      **Endpoints in this category help you manage organization and group profile configurations.**
+
+      With reusable profile configurations, users can preserve organization and group settings and reuse them across multiple Spectra Assure products. This ensures consistency across products and automatically applies any predefined customizations, reducing the risk of configuration errors and discrepancies.
+
+paths:
+  /scan/{organization}/{group}/pkg:rl/{project}/{package}@{version}:
+    parameters:
+      - $ref: "#/components/parameters/organization"
+      - $ref: "#/components/parameters/group"
+      - $ref: "#/components/parameters/project"
+      - $ref: "#/components/parameters/package"
+      - $ref: "#/components/parameters/version"
+      - $ref: "#/components/parameters/build"
+      - in: query
+        name: replace
+        required: false
+        description: |-
+          This optional parameter lets you replace (overwrite) an already existing package version in the project with the package version you're uploading. This functionality is equivalent to the `--replace` option in the `rl-secure scan` command.
+
+          If this parameter is omitted or set to **false** and the package version you're trying to upload already exists in the specified project, the API returns the 409 error response.
+        schema:
+          type: boolean
+          default: false
+      - in: query
+        name: force
+        required: false
+        description: |-
+          In the Portal, a package can only have a limited amount of versions. If a package already has the maximum number of versions, you can use this optional parameter to specify if the oldest version of the package should be deleted to make space for the version you're uploading.
+
+          If this parameter is omitted or set to **false** and the package already has the maximum allowed number of versions, the API returns the 400 error response.
+
+          This parameter is incompatible with `build=repro`.
+        schema:
+          type: boolean
+          default: false
+      - in: query
+        name: diff_with
+        required: false
+        description: |-
+          This optional parameter lets you specify a previous package version against which you want to compare (diff) the version you're uploading. The specified version must exist in the package. This functionality is equivalent to the `--diff-with` option in the `rl-secure report` command.
+
+          This parameter is incompatible with `build=repro`.
+        schema:
+          type: string
+          example: 1.1.0
+          description: Name of the package version that will be compared to the version you're uploading. This version is treated as the predecessor and displayed in the diff section of the report as the 'Referential File'.
+      - in: query
+        name: product
+        required: false
+        schema:
+          $ref: "#/components/schemas/VersionMetadataProduct"
+      - in: query
+        name: publisher
+        required: false
+        schema:
+          $ref: "#/components/schemas/VersionMetadataPublisher"
+      - in: query
+        name: category
+        required: false
+        schema:
+          allOf:
+            - $ref: "#/components/schemas/SoftwareCategory"
+            - default: Other
+      - in: query
+        name: license
+        required: false
+        schema:
+          allOf:
+            - $ref: "#/components/schemas/SoftwareLicense"
+            - default: Unknown
+      - in: query
+        name: platform
+        required: false
+        schema:
+          allOf:
+            - $ref: "#/components/schemas/SoftwarePlatform"
+            - default: Other
+      - in: query
+        name: release_date
+        required: false
+        schema:
+          allOf:
+            - $ref: "#/components/schemas/DateTime"
+            - description: Date and time to set and display as the release date for the software package version in the Portal. When this parameter is omitted from the request, the version is considered unreleased. You can change the release status at any time directly through the Portal interface or through the API with the **Modify a version** endpoint.
+      - in: header
+        name: Content-Disposition
+        required: true
+        description: Specify the name of the uploaded file preceded by the `attachment` parameter. This file name will be visible in the analysis reports.
+        schema:
+          type: string
+          example: "attachment; filename=upload.exe"
+      - in: header
+        name: Content-Length
+        required: true
+        description: Specify the size of the uploaded file in bytes. If the filesize is larger than the available quota, the API returns the 402 error response.
+        schema:
+          type: string
+          example: "524288"
+    post:
+      operationId: scanVersion
+      summary: Upload and scan a version
+      description: |-
+        Scan a file and add it as a new package version to a project in the Portal. If the project or package specified in the request don't exist in the Portal, they will be automatically created.
+
+        For a file to be successfully uploaded and analyzed on the Portal, your group must have enough available [analysis capacity](https://docs.secure.software/portal/analysis-capacity). The file size you want to upload must not exceed any configured group limits.
+
+        If the package version specified in the request already exists in the package, the API returns the 409 error response. You can repeat the request with the `replace` parameter in the query to overwrite the existing version.
+
+        To add a reproducible build artifact to an existing package version, use the `build` query parameter set to the `repro` value (`?build=repro`). If a reproducible build artifact already exists for a package version, the API returns a 400 error response. In this case, you should repeat the request with the `replace` query parameter set to `true`.
+
+        Only one file (main package version artifact or reproducible build artifact) can be uploaded per request.
+      tags:
+        - Version
+      x-codeSamples:
+        - lang: bash
+          label: 'Shell'
+          source:
+            $ref: './code-samples/curl/scanVersion'
+        - lang: python
+          label: 'Python - Requests'
+          source:
+            $ref: './code-samples/python/scanVersion'
+        - lang: javascript
+          label: 'NodeJS - Request'
+          source:
+            $ref: './code-samples/node/scanVersion'
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+              description: File to be uploaded to the Portal.
+      responses:
+        '201':
+          description: Created
+          content:
+            text/plain:
+              example: 'Created'
+        '400':
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                MaxNumberOfVersionsInPackage:
+                  value:
+                    error: Package has reached maximum number of versions
+                ReplaceVersionWithExistingDescendants:
+                  value:
+                    error: Cannot replace version with existing descendants
+                InvalidPreviousVersion:
+                  value:
+                    error: Invalid previous version
+                NoOrganization:
+                  value:
+                    error: Organization with provided reference does not exist
+                NoGroup:
+                  value:
+                    error: Group with provided reference does not exist
+                UnsupportedCharacter:
+                  value:
+                    error: Resource name contains one or more of the following forbidden characters \/:*?"<>|
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '402':
+          $ref: '#/components/responses/InsufficientRemainingCapacity'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: Version already exists
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/ServerError'
+
+  /url-import/{organization}/{group}/pkg:rl/{project}/{package}@{version}:
+    parameters:
+      - $ref: "#/components/parameters/organization"
+      - $ref: "#/components/parameters/group"
+      - $ref: "#/components/parameters/project"
+      - $ref: "#/components/parameters/package"
+      - $ref: "#/components/parameters/version"
+      - in: query
+        name: max_size
+        required: false
+        schema:
+          type: integer
+          description: "The maximum file size that the Portal will attempt to download from the specified URL, in bytes. Keep in mind that the file size estimate before the download starts can be unreliable."
+      - in: query
+        name: replace
+        required: false
+        description: "This optional parameter lets you replace (overwrite) an already existing package version in the project with the package version you're uploading. This functionality is equivalent to the `--replace` option in the `rl-secure scan` command. If this parameter is set to **false** and the package version you're trying to upload already exists in the specified project, the API returns the 409 error response."
+        schema:
+          type: boolean
+          default: false
+      - in: query
+        name: force
+        required: false
+        description: "In the Portal, a package can only have a limited amount of versions. If a package already has the maximum number of versions, you can use this optional parameter to specify if the oldest version of the package should be deleted to make space for the version you're uploading. If this parameter is set to **false** and the package already has the maximum allowed number of versions, the API returns the 400 error response."
+        schema:
+          type: boolean
+          default: false
+      - in: query
+        name: diff_with
+        required: false
+        description: "This optional parameter lets you specify a previous package version against which you want to compare (diff) the version you're uploading. The specified version must exist in the package. This functionality is equivalent to the `--diff-with` option in the `rl-secure report` command."
+        schema:
+          type: string
+          example: 1.1.0
+          description: "Name of the package version that will be compared to the version you're uploading. This version is treated as the predecessor and displayed in the diff section of the report as the 'Referential File'."
+      - in: query
+        name: product
+        required: false
+        schema:
+          $ref: "#/components/schemas/VersionMetadataProduct"
+      - in: query
+        name: publisher
+        required: false
+        schema:
+          $ref: "#/components/schemas/VersionMetadataPublisher"
+      - in: query
+        name: category
+        required: false
+        schema:
+          allOf:
+            - $ref: "#/components/schemas/SoftwareCategory"
+            - default: Other
+      - in: query
+        name: license
+        required: false
+        schema:
+          allOf:
+            - $ref: "#/components/schemas/SoftwareLicense"
+            - default: Unknown
+      - in: query
+        name: platform
+        required: false
+        schema:
+          allOf:
+            - $ref: "#/components/schemas/SoftwarePlatform"
+            - default: Other
+      - in: query
+        name: release_date
+        required: false
+        schema:
+          $ref: "#/components/schemas/DateTime"
+
+    post:
+      operationId: importVersion
+      summary: Import a version from URL
+      description: |-
+        Specify a URL from which to download a file and import it as a new package version into the Portal. If the project or package specified in the request don't exist in the Portal, they will be automatically created.
+
+        Only one package version can be imported per request.
+
+        To successfully import and analyze a file from a URL:
+
+        - check that the file format is supported in the [file format](https://docs.secure.software/concepts/filetypes) and [community/language coverage](https://docs.secure.software/concepts/language-coverage) lists
+        - make sure your group has enough available [analysis capacity](https://docs.secure.software/portal/analysis-capacity). The file size you want to import must not exceed any configured group limits. You can use the optional query parameter `max_size` to limit the size of the imported file if necessary
+
+        Only Support, Organization Admin, Group Owner, and Maintainer roles can import a package version.
+
+        If the package version specified in the request already exists in the package, the API returns the 409 error response. You can repeat the request with the `replace` parameter in the query to overwrite the existing version.
+
+        Some servers may require authentication for file downloads from URLs. In that case, you should use either the `auth-user` and `auth-pass` or the `bearer-token` parameters in the request body. Usernames, passwords, and tokens provided through those authentication options are never stored in Spectra Assure products. They are forwarded directly to the service that requests authentication to start the file download.
+
+      tags:
+        - Version
+      x-codeSamples:
+        - lang: bash
+          label: 'Shell'
+          source:
+            $ref: './code-samples/curl/importVersion'
+        - lang: python
+          label: 'Python - Requests'
+          source:
+            $ref: './code-samples/python/importVersion'
+        - lang: javascript
+          label: 'NodeJS - Request'
+          source:
+            $ref: './code-samples/node/importVersion'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - url
+              properties:
+                url:
+                  type: string
+                  description: "The URL from which you want to download and import a software package into the Portal. If the URL is not valid or if there is no downloadable file at the specified location, the import will fail."
+                  format: uri
+                  maxLength: 4096
+                  example: "https://example.com/downloads/example-file.exe"
+                auth-user:
+                  type: string
+                  description: "If authentication is required for downloading the software package from the specified URL, use this parameter to provide the username. Cannot be used with `bearer-token`."
+                  example: "username"
+                auth-pass:
+                  type: string
+                  format: password
+                  description: "If authentication is required for downloading the software package from the specified URL, use this parameter to provide the password. Cannot be used with `bearer-token`."
+                bearer-token:
+                  type: string
+                  description: "If token-based authentication is required for downloading the software package from the specified URL, use this parameter to provide a Bearer token. Cannot be used with `auth-user` and `auth-pass`."
+                  example: "Bearer <token>"
+
+      responses:
+        "201":
+          description: Created
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                MaxNumberOfVersionsInPackage:
+                  value:
+                    error: Package has reached the maximum number of versions
+                ReplacingVersionWithExistingDescendants:
+                  value:
+                    error: Cannot replace version with existing descendants
+                InvalidPreviousVersion:
+                  value:
+                    error: Invalid previous version
+                MaxFileSizeExceeded:
+                  value:
+                    error: File size exceeds provided 'max_size'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "402":
+          $ref: '#/components/responses/InsufficientRemainingCapacity'
+        "403":
+          $ref: '#/components/responses/Forbidden'
+        "404":
+          $ref: '#/components/responses/NotFound'
+        "409":
+          description: Version already exists
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "429":
+          $ref: '#/components/responses/TooManyRequests'
+        "500":
+          $ref: '#/components/responses/ServerError'
+
+  /sync/{organization}/{group}/pkg:rl/{project}/{package}@{version}:
+    parameters:
+      - $ref: "#/components/parameters/organization"
+      - $ref: "#/components/parameters/group"
+      - $ref: "#/components/parameters/project"
+      - $ref: "#/components/parameters/package"
+      - $ref: "#/components/parameters/version"
+    post:
+      operationId: syncVersion
+      summary: Rescan a version
+      description: |-
+        Rescans the existing package version to synchronize it with the updated configuration or with the latest engine update. This action is equivalent to the `Reanalyze` action on the Portal.
+
+        Reanalyzing a package version does not count towards the monthly analysis capacity.
+
+        When you request reanalysis from this endpoint, the Portal automatically detects configuration changes or engine updates that would require synchronization. If there haven't been any changes, reanalysis is skipped and the API returns the `200` response. This means you don't need to manually check for configuration changes or engine updates prior to requesting reanalysis.
+      tags:
+        - Version
+      responses:
+        '200':
+          description: Version already in sync
+          content:
+            text/plain:
+              example: 'Version already in sync'
+        '202':
+          description: Sync started
+          content:
+            text/plain:
+              example: 'Sync started'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/ServerError'
+
+  /status/{organization}/{group}/pkg:rl/{project}/{package}@{version}:
+    parameters:
+      - $ref: "#/components/parameters/organization"
+      - $ref: "#/components/parameters/group"
+      - $ref: "#/components/parameters/project"
+      - $ref: "#/components/parameters/package"
+      - $ref: "#/components/parameters/version"
+      - $ref: "#/components/parameters/build"
+      - $ref: "#/components/parameters/download"
+    get:
+      operationId: getVersionStatus
+      summary: Show analysis status
+      description: |-
+        Check the analysis status of a package version that was previously uploaded to the Portal. If the version has been successfully analyzed, the response includes a summary of the analysis report.
+
+        To retrieve the full analysis report in any of the supported formats, use the **Export analysis report** endpoint.
+
+        By default, this endpoint returns the status of the main (representative) artifact in the version. To check the status of a reproducible build artifact, use the `build` query parameter set to the `repro` value. If a reproducible build artifact doesn't exist for the requested package version, the API returns an error response.
+
+        Note that this endpoint returns the analysis status of the requested file (either the main package version artifact or the reproducible build artifact). It doesn't include details on the checks that were performed during analysis. To view that information, use the **Show performed checks** endpoint.
+
+        Optionally, this endpoint can return a short-lived download link for the main artifact or the reproducible build artifact if the `download` query parameter is used. With the `build` query parameter, specify for which artifact the download link should be generated. If the `build` parameter is omitted from the request, the download link is generated for the main artifact.
+
+        The download link is valid only for 60 seconds, after which it can be requested again. Every time the download link is generated, the Portal Download Capacity is reduced by the artifact's file size, even if the artifact is not downloaded from the link. **To download the artifact, the user account that is sending the request must have the appropriate permissions.** If the user account doesn't have permission to download files from the Portal, the endpoint responds with an error and the Download Capacity remains unaffected.
+      tags:
+        - Version
+      x-codeSamples:
+        - lang: bash
+          label: 'Shell'
+          source:
+            $ref: './code-samples/curl/getVersionStatus'
+        - lang: python
+          label: 'Python - Requests'
+          source:
+            $ref: './code-samples/python/getVersionStatus'
+        - lang: javascript
+          label: 'NodeJS - Request'
+          source:
+            $ref: './code-samples/node/getVersionStatus'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - analysis
+                properties:
+                  analysis:
+                    type: object
+                    required:
+                      - schema
+                      - timestamp
+                      - version
+                      - duration
+                      - status
+                      - report
+                    properties:
+                      schema:
+                        type: string
+                        enum:
+                          - '2'
+                        nullable: true
+                        description: Version of the report schema. Version number is incremented to indicate a break of backwards compatibility.
+                      timestamp:
+                        type: string
+                        format: date-time
+                        nullable: true
+                        description: Indicates when the software package was last analyzed in ISO-8601 time format.
+                      version:
+                        type: string
+                        example: 5.0.0.0
+                        nullable: true
+                        description: Version of the analysis engine that was used to inspect the software package.
+                      duration:
+                        type: string
+                        example: '00:07:49.859'
+                        nullable: true
+                        description: Indicates how long it took to complete the analysis step.
+                      status:
+                        type: string
+                        enum:
+                          - PROCESSING
+                          - DONE
+                          - ERROR
+                        example: DONE
+                        description: Indicates the analysis status for the requested package version.
+                      report:
+                        $ref: '#/components/schemas/AnalysisReport'
+        '400':
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                VersionDoesntHaveRepro:
+                  value:
+                    error: Provided version does not have a reproducible build.
+                NoOrganization:
+                  value:
+                    error: Organization with provided reference does not exist
+                NoGroup:
+                  value:
+                    error: Group with provided reference does not exist
+                UnsupportedCharacter:
+                  value:
+                    error: Resource name contains one or more of the following forbidden characters \/:*?"<>|
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/ServerError'
+  /checks/{organization}/{group}/pkg:rl/{project}/{package}@{version}:
+    parameters:
+      - $ref: "#/components/parameters/organization"
+      - $ref: "#/components/parameters/group"
+      - $ref: "#/components/parameters/project"
+      - $ref: "#/components/parameters/package"
+      - $ref: "#/components/parameters/version"
+    get:
+      operationId: getVersionChecks
+      summary: Show performed checks
+      description: |-
+        Displays a summary of all checks that were performed by Spectra Assure for the requested package version. This includes software analysis, diff checks (comparison against another package version) and reproducible build checks (comparison of the main package version artifact against a reproducible build artifact).
+
+        The response is aligned with the **rl-checks** [report format schema](https://docs.secure.software/cli/rl-checks-schema).
+      tags:
+        - Version
+      x-codeSamples:
+        - lang: bash
+          label: 'Shell'
+          source:
+            $ref: './code-samples/curl/getVersionChecks'
+        - lang: python
+          label: 'Python - Requests'
+          source:
+            $ref: './code-samples/python/getVersionChecks'
+        - lang: javascript
+          label: 'NodeJS - Request'
+          source:
+            $ref: './code-samples/node/getVersionChecks'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - analysis
+                properties:
+                  analysis:
+                    type: object
+                    required:
+                      - schema
+                      - timestamp
+                      - version
+                      - duration
+                      - report
+                    properties:
+                      schema:
+                        type: number
+                        example: 2
+                        description: Version of the report schema. Version number is incremented to indicate a break of backwards compatibility.
+                      timestamp:
+                        type: string
+                        format: date-time
+                        example: '2024-03-25T10:07:27Z'
+                        description: Indicates when the software package was last analyzed in ISO-8601 time format.
+                      version:
+                        type: string
+                        example: 5.0.0.0
+                        description: Version of the analysis engine that was used to inspect the software package.
+                      duration:
+                        type: string
+                        example: '00:07:49.859'
+                        description: Indicates how long it took to complete the analysis step.
+                      report:
+                        $ref: '#/components/schemas/ChecksReport'
+        '202':
+          $ref: '#/components/responses/NoAnalysis'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NoReport'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/ServerError'
+  /report/{organization}/{group}/{report_type}/pkg:rl/{project}/{package}@{version}:
+    parameters:
+      - $ref: "#/components/parameters/organization"
+      - $ref: "#/components/parameters/group"
+      - $ref: "#/components/parameters/project"
+      - $ref: "#/components/parameters/package"
+      - $ref: "#/components/parameters/version"
+      - $ref: "#/components/parameters/build"
+      - in: path
+        name: report_type
+        required: true
+        schema:
+          type: string
+          enum:
+            - cyclonedx
+            - rl-checks
+            - rl-cve
+            - rl-diff
+            - rl-json
+            - rl-summary-pdf
+            - rl-uri
+            - sarif
+            - spdx
+          description: Specify the report type to export. The API returns the report contents in the response.
+    get:
+      operationId: getVersionReport
+      summary: Export analysis report
+      description: |-
+        Retrieve the analysis report in the format specified with `report_type` for the specified package version. Contents of the report are returned in the response.
+
+        By default, the endpoint returns the report for the main (representative) artifact in the package version. To get the report for a reproducible build artifact, use the `build` query parameter set to the `repro` value.
+
+        If a reproducible build artifact does not exist for the requested package version, the API returns a 400 error response.
+
+        With this endpoint, you can get the following report formats:
+
+        - [CycloneDX](https://cyclonedx.org/specification/overview/)
+        - [rl-checks](https://docs.secure.software/cli/rl-checks-schema)
+        - [rl-cve](https://docs.secure.software/cli/rl-cve-schema)
+        - [rl-diff](https://docs.secure.software/cli/rl-diff-schema)
+        - [rl-json](https://docs.secure.software/cli/rl-json-schema)
+        - [rl-summary-pdf](https://docs.secure.software/safe/report/report-summary)
+        - [rl-uri](https://docs.secure.software/cli/rl-uri-schema)
+        - [SARIF](https://docs.oasis-open.org/sarif/sarif/v2.0/sarif-v2.0.html)
+        - [SPDX](https://spdx.dev/specifications/)
+
+        Only one report can be retrieved per request.
+
+        To get the full SAFE report for the package version, use the [Download RL-SAFE archive](https://docs.secure.software/api-reference/#tag/Version/operation/getRlSafeVersionArchive) endpoint.
+      tags:
+        - Version
+      x-codeSamples:
+        - lang: bash
+          label: 'Shell'
+          source:
+            $ref: './code-samples/curl/getVersionReport'
+        - lang: python
+          label: 'Python - Requests'
+          source:
+            $ref: './code-samples/python/getVersionReport'
+        - lang: javascript
+          label: 'NodeJS - Request'
+          source:
+            $ref: './code-samples/node/getVersionReport'
+
+      responses:
+        '200':
+          description: OK
+          content:
+            text/csv:
+              schema:
+                type: string
+              example: Contents of the report file in CSV format
+            application/json:
+              schema:
+                type: object
+              example: Contents of the report file in JSON format
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+              example: The report summary in PDF format
+          headers:
+            Content-Disposition:
+              schema:
+                type: string
+              description: "The default file name is different for each report format. All report file names are listed in the [supported report formats](https://docs.secure.software/concepts/analysis-reports#supported-report-formats) table."
+              example: attachment; filename='report.type.json'
+        '202':
+          $ref: '#/components/responses/NoAnalysis'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NoReport'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/ServerError'
+
+  /pack/safe/{organization}/{group}/pkg:rl/{project}/{package}@{version}:
+    parameters:
+      - $ref: "#/components/parameters/organization"
+      - $ref: "#/components/parameters/group"
+      - $ref: "#/components/parameters/project"
+      - $ref: "#/components/parameters/package"
+      - $ref: "#/components/parameters/version"
+      - $ref: "#/components/parameters/build"
+    get:
+      operationId: getRlSafeVersionArchive
+      summary: Export RL-SAFE archive
+      description: |-
+        Generate the RL-SAFE archive download link for the specified package version. The RL-SAFE archive contains the full SAFE report and all other supported report formats for a software package. To open the archive and work with it, you need the [SAFE Viewer](https://docs.secure.software/safe-viewer) - a free, cross-platform tool developed by ReversingLabs.
+
+        **The RL-SAFE archive is the only way to download the complete SAFE report from the Portal for offline viewing and sharing.** Read more about [the RL-SAFE archive](https://docs.secure.software/concepts/analysis-reports#rl-safe-archive) to understand its contents and purpose.
+
+        The response includes the `download_link` field. That is the URL from which you can download the RL-SAFE archive. The URL is valid until the time specified in the `expiration_timestamp` response field. When the URL expires, you have to send a new request to this endpoint to get the URL again.
+
+        By default, the endpoint returns the download link for the RL-SAFE archive of the main (representative) artifact in the package version. To download the archive of a reproducible build artifact, use the `build` query parameter set to the `repro` value. If a reproducible build artifact does not exist for the requested package version, the API returns a 400 error response.
+      tags:
+        - Version
+      x-codeSamples:
+        - lang: bash
+          label: 'Shell'
+          source:
+            $ref: './code-samples/curl/getArchive'
+        - lang: python
+          label: 'Python - Requests'
+          source:
+            $ref: './code-samples/python/getArchive'
+        - lang: javascript
+          label: 'NodeJS - Request'
+          source:
+            $ref: './code-samples/node/getArchive'
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+                schema:
+                  type: object
+                  required:
+                    - download_link
+                    - file_name
+                    - expiration_timestamp
+                  properties:
+                    download_link:
+                      type: string
+                      description: "The URL from which you can download the RL-SAFE archive for the requested package version. The URL is valid until the date and time specified in the `expiration_timestamp` field."
+                      example: "http://cloud.storage.url/example/your-report.rl-safe"
+                    file_name:
+                      type: string
+                      description: "Name of the RL-SAFE archive file that will be downloaded from the URL specified in the `download_link` field."
+                      example: "report.rl-safe"
+                    expiration_timestamp:
+                      type: string
+                      description: "The date and time when the download URL for the RL-SAFE archive expires."
+                      example: 2024-11-26T06:48:39.412093+00:00
+        '202':
+          $ref: '#/components/responses/NoAnalysis'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NoReport'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/ServerError'
+
+  /list/{organization}/{group}/pkg:rl/{project}/{package}@{version}:
+    parameters:
+      - $ref: "#/components/parameters/organization"
+      - $ref: "#/components/parameters/group"
+      - $ref: "#/components/parameters/project"
+      - $ref: "#/components/parameters/package"
+      - $ref: "#/components/parameters/version"
+    get:
+      operationId: versionInfo
+      summary: Show version details
+      description: "Display basic information about a package version that was previously uploaded to a project in the Portal. The information includes the current release status of the package version and the details about file approval for third-party risk management workflows."
+      tags:
+        - Version
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  version:
+                    type: string
+                    example: 5.5.8
+                  is_released:
+                    type: boolean
+                  software_info:
+                    $ref: '#/components/schemas/SoftwareInfo'
+                  approval_status:
+                    $ref: '#/components/schemas/ApprovalStatusDisplay'
+                  approval_information:
+                    nullable: true
+                    allOf:
+                      - $ref: '#/components/schemas/ApprovalStatusInformation'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/ServerError'
+  /create/{organization}/{group}/pkg:rl/{project}:
+    parameters:
+      - $ref: "#/components/parameters/organization"
+      - $ref: "#/components/parameters/group"
+      - $ref: "#/components/parameters/project"
+    post:
+      operationId: postProject
+      summary: Create project
+      description: Create a new project in the specified Portal organization and group. The account you're using must have [the appropriate permissions](https://docs.secure.software/portal/members#roles-and-permissions) in the Portal organization to be able to create projects. Only one project can be created per request.
+      tags:
+        - Project
+      x-codeSamples:
+        - lang: bash
+          label: 'Shell'
+          source:
+            $ref: './code-samples/curl/postProject'
+        - lang: python
+          label: 'Python - Requests'
+          source:
+            $ref: './code-samples/python/postProject'
+        - lang: javascript
+          label: 'NodeJS - Request'
+          source:
+            $ref: './code-samples/node/postProject'
+
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                description:
+                  type: string
+                  example: An example project
+                  description: Optional brief description to associate with the new project.
+                  maxLength: 500
+      responses:
+        '201':
+          description: Created
+          content:
+            text/plain:
+              example: 'Created'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: Project already exists
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/ServerError'
+  /create/{organization}/{group}/pkg:rl/{project}/{package}:
+    parameters:
+      - $ref: "#/components/parameters/organization"
+      - $ref: "#/components/parameters/group"
+      - $ref: "#/components/parameters/project"
+      - $ref: "#/components/parameters/package"
+    post:
+      operationId: postPackage
+      summary: Create package
+      description: |-
+        Create a new package in the specified Portal organization, group, and project. If the project specified in the request doesn't already exist in the Portal, it will be automatically created.
+
+        All projects in a Portal organization can jointly contain at most 10,000 packages. The account you're using must have [the appropriate permissions](https://docs.secure.software/portal/members#roles-and-permissions) in the Portal organization to be able to create packages.
+
+        Only one package can be created per request. To add a version to the package, use the **Upload package version** endpoint.
+      tags:
+        - Package
+      x-codeSamples:
+        - lang: bash
+          label: 'Shell'
+          source:
+            $ref: './code-samples/curl/postPackage'
+        - lang: python
+          label: 'Python - Requests'
+          source:
+            $ref: './code-samples/python/postPackage'
+        - lang: javascript
+          label: 'NodeJS - Request'
+          source:
+            $ref: './code-samples/node/postPackage'
+
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                description:
+                  type: string
+                  example: This is my new package
+                  description: Optional brief description to associate with the new package.
+                  maxLength: 500
+      responses:
+        '201':
+          description: Created
+          content:
+            text/plain:
+              example: 'Created'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: Package already exists
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/ServerError'
+  /edit/{organization}/{group}/pkg:rl/{project}/{package}@{version}:
+    parameters:
+      - $ref: "#/components/parameters/organization"
+      - $ref: "#/components/parameters/group"
+      - $ref: "#/components/parameters/project"
+      - $ref: "#/components/parameters/package"
+      - $ref: "#/components/parameters/version"
+    patch:
+      operationId: patchVersion
+      summary: Modify a version
+      description: Update the information about a package version that was previously uploaded to a project in the Portal. With this endpoint, you can change the release status of a package version and modify parts of the package version metadata (product name, publisher name, software category, license, platform, and release date). Only one package version can be modified per request.
+      tags:
+        - Version
+      x-codeSamples:
+        - lang: bash
+          label: 'Shell'
+          source:
+            $ref: './code-samples/curl/patchVersion'
+        - lang: python
+          label: 'Python - Requests'
+          source:
+            $ref: './code-samples/python/patchVersion'
+        - lang: javascript
+          label: 'NodeJS - Request'
+          source:
+            $ref: './code-samples/node/patchVersion'
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                is_released:
+                  type: boolean
+                  description: Indicates whether the software package version should be displayed as released or not in the Portal interface.
+                product:
+                  $ref: "#/components/schemas/VersionMetadataProduct"
+                publisher:
+                  $ref: "#/components/schemas/VersionMetadataPublisher"
+                category:
+                  $ref: "#/components/schemas/SoftwareCategory"
+                license:
+                  $ref: "#/components/schemas/SoftwareLicense"
+                platform:
+                  $ref: "#/components/schemas/SoftwarePlatform"
+                release_date:
+                  allOf:
+                    - $ref: "#/components/schemas/DateTime"
+                    - description: Date and time to set and display as the release date for the software package version in the Portal. If `is_released` is set to `true` and this parameter is omitted, the release date is automatically set to Unix time 0 (midnight UTC, 1 January 1970).
+      responses:
+        '200':
+          description: OK
+          content:
+            text/plain:
+              example: 'OK'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/ServerError'
+  /edit/{organization}/{group}/pkg:rl/{project}:
+    parameters:
+      - $ref: "#/components/parameters/organization"
+      - $ref: "#/components/parameters/group"
+      - $ref: "#/components/parameters/project"
+    patch:
+      operationId: patchProject
+      summary: Modify project details
+      description: "Update the information about a project that was previously created in the Portal. With this endpoint, you can change the project name and the project description. The project name must be unique in the specified group. Only one project can be modified per request."
+      tags:
+        - Project
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  description: Name to associate with the project. Project names are case-sensitive. Special characters `\/:*?"<>|` are not supported.
+                  type: string
+                  example: New project name
+                description:
+                  description: "Optional brief description to associate with the project."
+                  type: string
+                  example: New short project description
+      responses:
+        '200':
+          description: OK
+          content:
+            text/plain:
+              example: OK
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: Project already exists
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/ServerError'
+  /edit/{organization}/{group}/pkg:rl/{project}/{package}:
+    parameters:
+      - $ref: "#/components/parameters/organization"
+      - $ref: "#/components/parameters/group"
+      - $ref: "#/components/parameters/project"
+      - $ref: "#/components/parameters/package"
+    patch:
+      operationId: patchPackage
+      summary: Modify package details
+      description: "Update the information about a package that was previously created in a project in the Portal. With this endpoint, you can change the package name and description. The package name must be unique in the specified project. Only one package can be modified per request."
+      tags:
+        - Package
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  description: Name to associate with the package. Package names are case-sensitive. Special characters `\/:*?"<>|` are not supported.
+                  type: string
+                  example: New package name
+                description:
+                  description: "Optional brief description to associate with the package."
+                  type: string
+                  example: New short package description
+      responses:
+        '200':
+          description: OK
+          content:
+            text/plain:
+              example: OK
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: Package already exists
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/ServerError'
+  /delete/{organization}/{group}/pkg:rl/{project}:
+    parameters:
+      - $ref: "#/components/parameters/organization"
+      - $ref: "#/components/parameters/group"
+      - $ref: "#/components/parameters/project"
+    delete:
+      operationId: deleteProject
+      summary: Delete a project
+      description: "Delete a project that was previously created in the Portal. When you delete a project, all packages and package versions in the project are removed from the Portal along with their metadata. To preserve analysis reports for package versions in the project, use the **Export analysis report** endpoint to download them before deleting the project. Only one project can be deleted per request."
+      tags:
+        - Project
+      responses:
+        '204':
+          description: Deleted
+          content:
+            text/plain:
+              example: Deleted
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/ServerError'
+  /delete/{organization}/{group}/pkg:rl/{project}/{package}:
+    parameters:
+      - $ref: "#/components/parameters/organization"
+      - $ref: "#/components/parameters/group"
+      - $ref: "#/components/parameters/project"
+      - $ref: "#/components/parameters/package"
+    delete:
+      operationId: deletePackage
+      summary: Delete a package from a project
+      description: "Delete a package that was previously created in a project in the Portal. When you delete a package, all versions of that package are removed from the Portal along with their metadata. To preserve analysis reports for package versions, use the **Export analysis report** endpoint to download them before deleting the package. Only one package can be deleted per request."
+      tags:
+        - Package
+      responses:
+        '204':
+          description: Deleted
+          content:
+            text/plain:
+              example: Deleted
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/ServerError'
+  /delete/{organization}/{group}/pkg:rl/{project}/{package}@{version}:
+    parameters:
+      - $ref: "#/components/parameters/organization"
+      - $ref: "#/components/parameters/group"
+      - $ref: "#/components/parameters/project"
+      - $ref: "#/components/parameters/package"
+      - $ref: "#/components/parameters/version"
+      - $ref: "#/components/parameters/build"
+    delete:
+      operationId: deleteVersion
+      summary: Delete a version
+      description: |-
+        Delete a package version that was previously uploaded to a project in the Portal. When you delete a package version, all its metadata is removed from the Portal, including analysis reports and any reproducible build artifacts.
+
+        If a package version has a reproducible build artifact, you can use the `build` query parameter set to the `repro` value to remove only that artifact without removing anything else. In this case, the main package version artifact and its metadata will be preserved.
+
+        To preserve analysis reports for the package version, use the **Export analysis report** endpoint to download the reports before deleting the version.
+
+        Only one package version can be deleted per request.
+      tags:
+        - Version
+      responses:
+        '204':
+          description: Deleted
+          content:
+            text/plain:
+              example: 'Deleted'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/ServerError'
+  /list/{organization}:
+    parameters:
+      - $ref: "#/components/parameters/organization"
+    get:
+      operationId: listGroups
+      summary: List groups in the organization
+      description: "Return a list of groups that the requesting user has the permission to access. In the response, groups are listed in alphabetical order."
+      tags:
+        - Group
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - groups
+                properties:
+                  groups:
+                    type: array
+                    items:
+                      type: object
+                      required:
+                        - name
+                        - name_id
+                        - description
+                        - member_count
+                        - is_default
+                      properties:
+                        name:
+                          description: "Group name as created and displayed in the Portal."
+                          type: string
+                          example: "My group"
+                        name_id:
+                          $ref: '#/components/schemas/UUID'
+                        description:
+                          type: string
+                          description: "Optional brief description to associate with the group."
+                          example: "This is an example group used for testing purposes"
+                        member_count:
+                          type: integer
+                          description: "Number of members in the group."
+                          example: 3
+                        is_default:
+                          type: boolean
+                          description: "Indicates whether the group is marked as the default group for the Portal organization."
+                          example: false
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/ServerError'
+  /list/{organization}/{group}:
+    parameters:
+      - $ref: "#/components/parameters/organization"
+      - $ref: "#/components/parameters/group"
+    get:
+      operationId: listGroupProjects
+      summary: List projects in a group
+      description: "Return a list of all projects created in the requested group. Projects are listed in chronological order, from the oldest to the most recently created."
+      tags:
+        - Group
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - name
+                  - name_id
+                  - projects
+                properties:
+                  name:
+                    description: "Group name as created and displayed in the Portal."
+                    type: string
+                    example: My group
+                  name_id:
+                    $ref: '#/components/schemas/UUID'
+                  projects:
+                    type: array
+                    items:
+                      type: object
+                      required:
+                        - name
+                        - name_id
+                      properties:
+                        name:
+                          description: "Project name as created and displayed in the Portal."
+                          type: string
+                          example: My project
+                        name_id:
+                          $ref: '#/components/schemas/UUID'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/ServerError'
+  /list/{organization}/{group}/pkg:rl/{project}:
+    parameters:
+      - $ref: "#/components/parameters/organization"
+      - $ref: "#/components/parameters/group"
+      - $ref: "#/components/parameters/project"
+    get:
+      operationId: listPackages
+      summary: List packages in a project
+      description: "Display basic information about a project that was previously created in the Portal, along with the names of all packages in the project."
+      tags:
+        - Project
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - name
+                  - name_id
+                  - description
+                  - packages
+                properties:
+                  name:
+                    description: "Project name as created and displayed in the Portal."
+                    type: string
+                    example: My Project
+                  name_id:
+                    $ref: '#/components/schemas/UUID'
+                  description:
+                    type: string
+                    description: "Optional brief description to associate with the project."
+                    example: "This is an example project used for testing purposes"
+                  packages:
+                    type: array
+                    description: "List of all packages in the requested project."
+                    items:
+                      type: object
+                      required:
+                        - name
+                        - name_id
+                      properties:
+                        name:
+                          description: "Package name as created and displayed in the Portal."
+                          type: string
+                          example: Demo package
+                        name_id:
+                          $ref: '#/components/schemas/UUID'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/ServerError'
+  /list/{organization}/{group}/pkg:rl/{project}/{package}:
+    parameters:
+      - $ref: "#/components/parameters/organization"
+      - $ref: "#/components/parameters/group"
+      - $ref: "#/components/parameters/project"
+      - $ref: "#/components/parameters/package"
+    get:
+      operationId: listVersions
+      summary: List package versions
+      description: "Display basic information about a package that was previously created in a project in the Portal, along with all versions associated with the package."
+      tags:
+        - Package
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - name
+                  - name_id
+                  - description
+                  - versions
+                properties:
+                  name:
+                    type: string
+                    description: "Package name as created and displayed in the Portal."
+                    example: ZoomInstaller
+                  name_id:
+                    $ref: '#/components/schemas/UUID'
+                  description:
+                    type: string
+                    description: "Optional brief description to associate with the package."
+                    example: Windows packages for Zoom
+                  versions:
+                    type: array
+                    description: "List of all versions of the requested package."
+                    items:
+                      type: object
+                      properties:
+                        version:
+                          type: string
+                          description: "Package version name as created and displayed in the Portal."
+                          example: "5.12"
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/ServerError'
+  /approve/{organization}/{group}/pkg:rl/{project}/{package}@{version}:
+    parameters:
+      - $ref: "#/components/parameters/organization"
+      - $ref: "#/components/parameters/group"
+      - $ref: "#/components/parameters/project"
+      - $ref: "#/components/parameters/package"
+      - $ref: "#/components/parameters/version"
+    put:
+      operationId: approveVersion
+      summary: Approve a version
+      description: |-
+        Set the approval status for the requested package version to **Approved**. The request will be successful only if the package version currently has one of the following approval statuses: *Approval Pending*, *Rejected*. Revoked package versions cannot be approved again.
+
+        Your user account must have one of the following roles to be able to approve package versions: Organization Administrator, Organization Security, Group Owner.
+
+        For auditing purposes, you can optionally specify the reason for approving the package version in the request body.
+
+        By default, all package versions uploaded to the Portal have the *Approval Pending* status.
+      tags:
+        - Version
+        - Approval
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TPRMReason"
+            examples:
+              ApprovalReason:
+                value:
+                  reason: No failing policy checks identified during analysis
+      responses:
+        '200':
+          description: Approved
+          content:
+            text/plain:
+              example: 'Approved'
+        '400':
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Error"
+              examples:
+                IncorrectApprovalStatus:
+                  value:
+                    error: Only a version with the 'Undetermined' and 'Rejected' approval statuses can be approved
+                NoOrganization:
+                  value:
+                    error: Organization with provided reference does not exist
+                NoGroup:
+                  value:
+                    error: Group with provided reference does not exist
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/ServerError'
+
+  /reject/{organization}/{group}/pkg:rl/{project}/{package}@{version}:
+    parameters:
+      - $ref: "#/components/parameters/organization"
+      - $ref: "#/components/parameters/group"
+      - $ref: "#/components/parameters/project"
+      - $ref: "#/components/parameters/package"
+      - $ref: "#/components/parameters/version"
+    put:
+      operationId: rejectVersion
+      summary: Reject a version
+      description: |-
+        Set the approval status for the requested package version to **Rejected**. The request will be successful only if the package version currently has the *Approval Pending* status. Revoked package versions cannot have their status changed to *Rejected*.
+
+        For auditing purposes, you can optionally specify the reason for rejecting the package version in the request body.
+
+        Your user account must have one of the following roles to be able to reject package versions: Organization Administrator, Organization Security, Group Owner.
+      tags:
+        - Version
+        - Approval
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TPRMReason"
+            examples:
+              RejectionReason:
+                value:
+                  reason: Alternate software selected for approval that poses less security risk
+      responses:
+        '200':
+          description: Rejected approval
+          content:
+            text/plain:
+              example: 'Rejected approval'
+        '400':
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Error"
+              examples:
+                IncorrectApprovalStatus:
+                  value:
+                    error: Only a version with the 'Undetermined' approval status can be rejected
+                NoOrganization:
+                  value:
+                    error: Organization with provided reference does not exist
+                NoGroup:
+                  value:
+                    error: Group with provided reference does not exist
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/ServerError'
+
+  /revoke/{organization}/{group}/pkg:rl/{project}/{package}@{version}:
+    parameters:
+      - $ref: "#/components/parameters/organization"
+      - $ref: "#/components/parameters/group"
+      - $ref: "#/components/parameters/project"
+      - $ref: "#/components/parameters/package"
+      - $ref: "#/components/parameters/version"
+    put:
+      operationId: revokeVersion
+      summary: Revoke approval
+      description: |-
+        Set the approval status for the requested package version to **Revoked**. The request will be successful only if the package version currently has the *Approved* status. When the approval status is set to **Revoked**, you can no longer change it back to *Approved* or *Rejected*.
+
+        For auditing purposes, you can optionally specify the reason for revoking approval in the request body.
+
+        Your user account must have one of the following roles to be able to revoke approval for package versions: Organization Administrator, Organization Security, Group Owner.
+      tags:
+        - Version
+        - Approval
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TPRMReason"
+            examples:
+              RevokeReason:
+                value:
+                  reason: Fixing inadvertent or incorrect approval of software
+      responses:
+        '200':
+          description: Revoked approval
+          content:
+            text/plain:
+              example: 'Revoked approval'
+        '400':
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Error"
+              examples:
+                IncorrectApprovalStatus:
+                  value:
+                    error: Only a version with the 'Approved' approval status can be revoked
+                NoOrganization:
+                  value:
+                    error: Organization with provided reference does not exist
+                NoGroup:
+                  value:
+                    error: Group with provided reference does not exist
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/ServerError'
+
+  /usage/{organization}:
+    parameters:
+      - $ref: "#/components/parameters/organization"
+    get:
+      operationId: listOrganizationUsage
+      summary: Usage details for an organization
+      description: |-
+        Return usage data for the specified organization and all groups the requesting user has the permission to access.
+        In the response, groups are listed in alphabetical order.
+
+        For an organization, next to the information tied to [analysis capacity](https://docs.secure.software/portal/analysis-capacity), there is an entire **Entitlements** section that allows you to check which [SAFE Assessment categories](https://docs.secure.software/portal/analysis-capacity#entitlements) are enabled for your ReversingLabs cloud account and are evaluated during software analysis.
+        If you're using both Portal and CLI, same entitlement restrictions apply to both products.
+      tags:
+        - Group
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - organization_usage
+                  - groups_usage
+                properties:
+                  organization_usage:
+                    $ref: "#/components/schemas/OrganizationUsage"
+                  groups_usage:
+                    type: array
+                    items:
+                      type: object
+                      required:
+                        - name
+                        - projects_usage_bytes
+                        - projects_usage_limit_bytes
+                        - filestream_usage_bytes
+                        - filestream_usage_limit_bytes
+                      properties:
+                        name:
+                          description: "Group name as created and displayed in the Portal."
+                          type: string
+                          example: "My group"
+                        projects_usage_bytes:
+                          $ref: "#/components/schemas/ProjectUsageBytes"
+                        projects_usage_limit_bytes:
+                          $ref: "#/components/schemas/ProjectUsageLimitBytes"
+                        filestream_usage_bytes:
+                          $ref: "#/components/schemas/FilestreamUsageBytes"
+                        filestream_usage_limit_bytes:
+                          $ref: "#/components/schemas/FilestreamUsageLimitBytes"
+                  cli_usage:
+                    type: object
+                    description: Detailed breakdown of CLI usage, separated into the global shared pool and specific site key allocations.
+                    required:
+                      - shared_pool
+                      - site_keys
+                    properties:
+                      shared_pool:
+                        type: object
+                        description: The unassigned capacity available to all CLI users who do not have a specific site key allocation.
+                        required:
+                          - allocation_bytes
+                          - usage_bytes
+                          - description
+                        properties:
+                          allocation_bytes:
+                            type: integer
+                            format: int64
+                            description: Total bytes available in the shared pool, which equals to the value that remains when all site key allocations are deducted from the total capacity available for the CLI.
+                            example: 53687091200
+                          usage_bytes:
+                            type: integer
+                            format: int64
+                            description: Total bytes currently consumed by shared pool users.
+                            example: 2147483648
+                          description:
+                            type: string
+                            description: A fixed label for the shared pool.
+                            example: "Shared Pool"
+                      site_keys:
+                        type: array
+                        description: List of specific site key allocations.
+                        items:
+                          type: object
+                          required:
+                            - site_key
+                            - allocation_bytes
+                            - usage_bytes
+                            - deleted
+                          properties:
+                            site_key:
+                              type: string
+                              description: A unique identifier for the site key. Site key is associated with the [CLI license](https://docs.secure.software/cli/licensing-guide#rl-secure-site-wide), but is not tied to a specific machine. This identifier always begins with `rlcli-`.
+                              example: "rlcli-0d4c691600f94dc80fba3a3ba344dd4d"
+                            allocation_bytes:
+                              type: integer
+                              format: int64
+                              description: Capacity reservation assigned to a specific site key.
+                              example: 1073741824
+                            usage_bytes:
+                              type: integer
+                              format: int64
+                              description: Usage consumption by a specific site key in the current month.
+                              example: 52428800
+                            deleted:
+                              type: boolean
+                              description: Whether this allocation has been deleted. This value resets at the beginning of the next month.
+                              example: false
+                            description:
+                              type: string
+                              description: User-defined description for a specific site key.
+                              example: "CI/CD Pipeline Key"
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/ServerError'
+
+  /usage/{organization}/{group}:
+    parameters:
+      - $ref: "#/components/parameters/organization"
+      - $ref: "#/components/parameters/group"
+    get:
+      operationId: listGroupUsage
+      summary: Usage details for a group
+      description: |-
+        Return usage data for the specified organization and group.
+
+        For an organization, next to the information tied to [analysis capacity](https://docs.secure.software/portal/analysis-capacity), there is an entire **Entitlements** section that allows you to check which [SAFE Assessment categories](https://docs.secure.software/portal/analysis-capacity#entitlements) are enabled for your ReversingLabs cloud account and are evaluated during software analysis.
+        If you're using both Portal and CLI, same entitlement restrictions apply to both products.
+
+        If the user account does not have permission to access the specified group, the endpoint responds with an error.
+      tags:
+        - Group
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - organization_usage
+                  - group_usage
+                properties:
+                  organization_usage:
+                    $ref: "#/components/schemas/OrganizationUsage"
+                  group_usage:
+                    type: object
+                    required:
+                      - projects_usage_bytes
+                      - projects_usage_limit_bytes
+                      - filestream_usage_bytes
+                      - filestream_usage_limit_bytes
+                    properties:
+                      projects_usage_bytes:
+                        $ref: "#/components/schemas/ProjectUsageBytes"
+                      projects_usage_limit_bytes:
+                        $ref: "#/components/schemas/ProjectUsageLimitBytes"
+                      filestream_usage_bytes:
+                        $ref: "#/components/schemas/FilestreamUsageBytes"
+                      filestream_usage_limit_bytes:
+                        $ref: "#/components/schemas/FilestreamUsageLimitBytes"
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/ServerError'
+
+  /community/find/packages:
+    $ref: community-endpoints/api_supply_chain_security_v2_find_packages.yaml
+  /community/report/version/pkg:{repository}/{namespace}/{package}@{version}:
+    $ref: community-endpoints/api_supply_chain_security_v2_report_version.yaml
+  /community/report/package/pkg:{repository}/{namespace}/{package}@{version}:
+    $ref: community-endpoints/api_supply_chain_security_v2_report_package.yaml
+
+  /profile/{organization}/import:
+    parameters:
+      - $ref: "#/components/parameters/organization"
+    post:
+      operationId: importOrganizationRlProfile
+      summary: Import organization profile configuration
+      description: |-
+        Import settings from a JSON file and apply them to the organization profile configuration. The JSON file contents must conform to the [rl-profile configuration file schema](https://docs.secure.software/cli/rl-profile-schema).
+      tags:
+        - Profile
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required:
+                - configuration_file
+              properties:
+                configuration_file:
+                  type: string
+                  format: binary
+                replace:
+                  type: boolean
+                  default: true
+                  description: This optional flag lets you decide how the imported configuration is applied. If true, the existing configuration is fully replaced by the imported configuration. If false, the imported configuration is merged into the existing configuration (only provided overrides are updated; others remain unchanged).
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+        "400":
+          $ref: '#/components/responses/BadRequest'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          $ref: '#/components/responses/Forbidden'
+        "404":
+          $ref: '#/components/responses/NotFound'
+        "429":
+          $ref: '#/components/responses/TooManyRequests'
+        "500":
+          $ref: '#/components/responses/ServerError'
+
+  /profile/{organization_name}/export:
+    parameters:
+      - $ref: "#/components/parameters/organization"
+    get:
+      operationId: exportOrganizationRlProfile
+      summary: Export organization profile configuration
+      description: |-
+        Download the current organization profile configuration as a JSON file (the `rl-profile` configuration file).
+      tags:
+        - Profile
+      responses:
+        "200":
+          description: Organization profile configuration JSON file.
+          headers:
+            Content-Disposition:
+              schema:
+                type: string
+                example: attachment; filename="organization-profile.json"
+          content:
+            application/json:
+              schema:
+                type: string
+                format: binary
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          $ref: '#/components/responses/Forbidden'
+        "404":
+          $ref: '#/components/responses/NotFound'
+        "429":
+          $ref: '#/components/responses/TooManyRequests'
+        "500":
+          $ref: '#/components/responses/ServerError'
+
+  /profile/{organization_name}/{group_name}/import:
+    parameters:
+      - $ref: "#/components/parameters/organization"
+      - $ref: "#/components/parameters/group"
+    post:
+      operationId: importGroupRlProfile
+      summary: Import group profile configuration
+      description: |-
+        Import settings from a JSON file and apply them to the group profile configuration. The JSON file contents must conform to the [rl-profile configuration file schema](https://docs.secure.software/cli/rl-profile-schema).
+      tags:
+        - Profile
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required:
+                - configuration_file
+              properties:
+                configuration_file:
+                  type: string
+                  format: binary
+                replace:
+                  type: boolean
+                  default: true
+                  description: This optional flag lets you decide how the imported configuration is applied. If true, the existing configuration is fully replaced by the imported configuration. If false, the imported configuration is merged into the existing configuration (only provided overrides are updated; others remain unchanged).
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+        "400":
+          $ref: '#/components/responses/BadRequest'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          $ref: '#/components/responses/Forbidden'
+        "404":
+          $ref: '#/components/responses/NotFound'
+        "429":
+          $ref: '#/components/responses/TooManyRequests'
+        "500":
+          $ref: '#/components/responses/ServerError'
+
+  /profile/{organization_name}/{group_name}/export:
+    parameters:
+      - $ref: "#/components/parameters/organization"
+      - $ref: "#/components/parameters/group"
+    get:
+      operationId: exportGroupRlProfile
+      summary: Export group profile configuration
+      description: |-
+        Download the current group profile configuration as a JSON file (the `rl-profile` configuration file).
+      tags:
+        - Profile
+      responses:
+        "200":
+          description: Group profile configuration JSON file.
+          headers:
+            Content-Disposition:
+              schema:
+                type: string
+                example: attachment; filename="group-profile.json"
+          content:
+            application/json:
+              schema:
+                type: string
+                format: binary
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          $ref: '#/components/responses/Forbidden'
+        "404":
+          $ref: '#/components/responses/NotFound'
+        "429":
+          $ref: '#/components/responses/TooManyRequests'
+        "500":
+          $ref: '#/components/responses/ServerError'
+
+components:
+  schemas:
+    TPRMReason:
+      type: object
+      required:
+        - reason
+      properties:
+        reason:
+          description: User-specified reason for changing the approval status for the package version
+          type: string
+    OrganizationUsage:
+      type: object
+      required:
+        - time_to_capacity_reset_seconds
+        - max_packages
+        - package_count
+        - total_capacity_bytes
+        - total_capacity_bytes_portal
+        - this_month_used_bytes_portal
+        - total_capacity_bytes_cli
+        - this_month_used_bytes_cli
+        - download_capacity_bytes
+        - downloaded_this_month_bytes
+        - promo_capacity_bytes
+        - entitlements
+      properties:
+        time_to_capacity_reset_seconds:
+          description: "Number of seconds until analysis capacity resets."
+          type: integer
+          example: 259200
+        max_packages:
+          description: "Maximum number of packages the organization can have."
+          type: integer
+          example: 10000
+        package_count:
+          description: "Number of packages in the organization."
+          type: integer
+          example: 1000
+        total_capacity_bytes:
+          description: "Analysis capacity for the organization (Portal + CLI + Flex)."
+          type: integer
+          example: 1181116006400
+        total_capacity_bytes_portal:
+          description: "Portal capacity bytes in the organization without Flex."
+          type: integer
+          example: 536870912000
+        this_month_used_bytes_portal:
+          description: "Total used bytes in the Portal in the organization in the current billing period."
+          type: integer
+          example: 40000000000
+        total_capacity_bytes_cli:
+          description: "CLI capacity bytes in the organization without Flex."
+          type: integer
+          example: 536870912000
+        this_month_used_bytes_cli:
+          description: "Total used bytes by CLI in the organization in the current billing period."
+          type: integer
+          example: 53687091200
+        download_capacity_bytes:
+          description: "Portal download capacity bytes."
+          type: integer
+          example: 30000000000
+        downloaded_this_month_bytes:
+          description: "Total downloaded bytes in the organization in the current billing period."
+          type: integer
+          example: 25000000000
+        promo_capacity_bytes:
+          description: "Total Flex capacity bytes in the organization in the current billing period."
+          type: integer
+          example: 1073741824000
+        entitlements:
+          description: "SAFE Assessment Entitlements"
+          type: object
+          required:
+            - hardening
+            - licenses
+            - malware
+            - secrets
+            - tampering
+            - vulnerabilities
+          properties:
+            hardening:
+              $ref: '#/components/schemas/Entitlement'
+            licenses:
+              $ref: '#/components/schemas/Entitlement'
+            malware:
+              $ref: '#/components/schemas/Entitlement'
+            secrets:
+              $ref: '#/components/schemas/Entitlement'
+            tampering:
+              $ref: '#/components/schemas/Entitlement'
+            vulnerabilities:
+              $ref: '#/components/schemas/Entitlement'
+    ProjectUsageBytes:
+      type: integer
+      description: "Analysis capacity used by all projects in the group, displayed in bytes."
+      example: 40000000000
+    ProjectUsageLimitBytes:
+      type: integer
+      nullable: true
+      description: "If any optional limits are configured for projects in the group, displays how much of the limit has been used in bytes."
+      example: 200000
+    FilestreamUsageBytes:
+      type: integer
+      description: "Analysis capacity used by filestream in the group, displayed in bytes."
+      example: 40000000000
+    FilestreamUsageLimitBytes:
+      type: integer
+      nullable: true
+      description: "If any optional limits are configured for filestream in the group, displays how much of the limit has been used in bytes."
+      example: 200000
+    Violations:
+      type: array
+      description: Lists policy violations that triggered the risk.
+      example: ["SQ30107","SQ30108","SQ30110"]
+      items:
+        type: string
+    VersionMetadataProduct:
+      type: string
+      example: Example application
+      maxLength: 200
+      description: Software product name
+    VersionMetadataPublisher:
+      type: string
+      example: Example software publisher
+      maxLength: 200
+      description: Software publisher
+    Hashes:
+      description: Hashes calculated for the analyzed software package (md5, sha1 and sha256).
+      type: array
+      items:
+        type: array
+        maxItems: 2
+        minItems: 2
+        items:
+          type: string
+        example:
+          - md5
+          - ff0fd1e7a5df8a22d0c921ebe7b1b793
+      example:
+        - - md5
+          - ff0fd1e7a5df8a22d0c921ebe7b1b793
+        - - sha1
+          - d63932d669fe6da664b4183d8e1d5a33a9492b9f
+        - - sha256
+          - 4430b43199a020b9a1f3bcfa9c55fcc207aea79ec4731def885e89980b8fe880
+    AnalysisReportInfo:
+      description: General software package information.
+      type: object
+      required:
+        - file
+        - statistics
+        - portal
+      properties:
+        file:
+          description: Basic software package analysis information.
+          type: object
+          required:
+            - hashes
+          properties:
+            hashes:
+              $ref: '#/components/schemas/Hashes'
+        statistics:
+          $ref: '#/components/schemas/Statistics'
+        portal:
+          description: "Information about the Portal instance where the API request was performed."
+          type: object
+          required:
+            - instance
+            - reference
+          properties:
+            instance:
+              description: "Name of the Portal instance. In most cases, this name is part of the Portal URL (a subdirectory of `my.secure.software`). For example, if your Portal URL is `my.secure.software/demo`, the instance name is `demo`."
+              type: string
+              example: "playground"
+            reference:
+              description: "[Path to the report](https://docs.secure.software/portal/shareable-reports#report-sharing) for the analyzed software package in the Portal. This information cuts down the time needed to find the report in the Portal UI. To directly access the report, append the path to your Portal URL."
+              type: string
+              example: "reports/group/57f70f86-71ea-43f8-b443-515d911c8d4a/report/example-project/example-package/v1/?build=version"
+            download:
+              description: "If the `download` parameter is used in the request, this field is included in the response. It contains a short-lived link where you can download the main version artifact or the reproducible build artifact (depending on what you specified in the request with the `build` parameter). The link is valid for 60 seconds. Even if the artifact is not downloaded from the link, the Portal Download Capacity is reduced by the artifact's file size."
+              type: string
+              example: "http://cloud.storage.url/company-slug/25ef1aa9-8909/file-843631Z.tar.gz"
+    AnalysisReportMetadata:
+      description: Collection of metadata properties for the analyzed software package.
+      type: object
+      required:
+        - assessments
+      properties:
+        assessments:
+          $ref: '#/components/schemas/Assessments'
+    AnalysisReport:
+      description: Summary of the analysis report for the software package version.
+      nullable: true
+      type: object
+      required:
+        - info
+        - metadata
+      properties:
+        info:
+          $ref: '#/components/schemas/AnalysisReportInfo'
+        metadata:
+          $ref: '#/components/schemas/AnalysisReportMetadata'
+    Entitlement:
+      type: boolean
+      description: Indicates whether the SAFE assessment category is evaluated during software analysis.
+      enum:
+        - true
+        - false
+      example: true
+    Assessments:
+      description: Information displayed in the SAFE assessment card.
+      type: object
+      required:
+        - licenses
+        - malware
+        - hardening
+        - secrets
+        - tampering
+        - vulnerabilities
+      properties:
+        licenses:
+          $ref: '#/components/schemas/Assessment'
+        malware:
+          $ref: '#/components/schemas/Assessment'
+        hardening:
+          $ref: '#/components/schemas/Assessment'
+        secrets:
+          $ref: '#/components/schemas/Assessment'
+        tampering:
+          $ref: '#/components/schemas/Assessment'
+        vulnerabilities:
+          $ref: '#/components/schemas/Assessment'
+    Assessment:
+      allOf:
+        - $ref: '#/components/schemas/Evaluation'
+        - type: object
+          properties:
+            final:
+              type: boolean
+              description: "Set to true for the SAFE assessment category with the highest deployment risk."
+            evaluations:
+              type: array
+              items:
+                $ref: "#/components/schemas/Evaluation"
+    Evaluation:
+      type: object
+      description: "SAFE assessment evaluation."
+      properties:
+        count:
+          type: integer
+          example: 17
+          description: Indicates how many instances of the specific risk type have been detected in the software package version.
+        label:
+          type: string
+          description: Indicates the risk type.
+        priority:
+          type: integer
+          description: Issue priority assigned to the highest-risk policy violation for the risk type. 0 is P0 (highest) while 4 is P4 (lowest).
+          enum: [0,1,2,3,4]
+          example: 3
+        status:
+          $ref: '#/components/schemas/PassFailWarningStatus'
+        violations:
+          type: array
+          description: Policy violations that triggered the risk.
+          items:
+            type: string
+            example: "SQ20119"
+    PassFailWarningStatus:
+      type: string
+      description: Indicates the status for the assessment category.
+      enum:
+        - pass
+        - fail
+        - warning
+    PassFailStatus:
+      description: Final release status for the analyzed software. Recommendation for the CI/CD process.
+      type: string
+      enum:
+        - pass
+        - fail
+    ChecksReport:
+      description: Summary of checks performed by Spectra Assure during analysis.
+      nullable: true
+      type: object
+      required:
+        - info
+        - scans
+      properties:
+        info:
+          $ref: '#/components/schemas/ChecksReportInfo'
+        scans:
+          $ref: '#/components/schemas/ChecksReportScans'
+    ChecksReportInfo:
+      description: General information about checks.
+      type: object
+      required:
+        - summary
+        - properties
+      properties:
+        summary:
+          description: Summary of all completed analysis checks.
+          type: object
+          required:
+            - scan_status
+            - scan_label
+            - reproducible
+            - pass_checks
+            - fail_checks
+          properties:
+            scan_status:
+              type: string
+              enum:
+                - pass
+                - fail
+                - warning
+              example: fail
+              description: Final scan status of the analyzed software package based on all performed checks.
+            scan_label:
+              type: string
+              example: RB:FAIL
+              description: Textual indicator displayed in Spectra Assure products to show the final scan status of the analyzed software package.
+            reproducible:
+              type: string
+              example: repro-check-fail
+              description: Status of the reproducible builds check (if performed).
+              enum:
+                - repro-not-checked
+                - repro-check-pass
+                - repro-check-fail
+            pass_checks:
+              type: integer
+              example: 2
+              description: Total number of passing checks.
+            fail_checks:
+              type: integer
+              example: 2
+              description: Total number of failing checks.
+        properties:
+          description: 'Reserved: An array of key-value properties (unused).'
+          example: []
+          items:
+            type: string
+          type: array
+    ChecksReportScans:
+      description: Details about each of the checks performed by Spectra Assure during analysis. The `scan-version` object contains details about checks on the main package version artifact. The `scan-repro` object contains details about checks on the reproducible build artifact (if any).
+      type: object
+      properties:
+        scan-repro:
+          allOf:
+            - $ref: '#/components/schemas/ChecksReportScanDetail'
+            - description: Details about checks performed on the reproducible build artifact.
+        scan-version:
+          allOf:
+            - $ref: '#/components/schemas/ChecksReportScanDetail'
+            - description: Details about checks performed on the main package version artifact.
+    ChecksReportScanDetail:
+      type: object
+      properties:
+        artifact:
+          $ref: '#/components/schemas/Artifact'
+        assessments:
+          description: Information displayed in the SAFE assessment card.
+          type: object
+          required:
+            - licenses
+            - malware
+            - hardening
+            - secrets
+            - tampering
+            - vulnerabilities
+          properties:
+            licenses:
+              allOf:
+                - $ref: '#/components/schemas/Assessment'
+                - properties:
+                    violations:
+                      $ref: '#/components/schemas/Violations'
+            malware:
+              allOf:
+                - $ref: '#/components/schemas/Assessment'
+                - properties:
+                    violations:
+                      $ref: '#/components/schemas/Violations'
+            hardening:
+              allOf:
+                - $ref: '#/components/schemas/Assessment'
+                - properties:
+                    violations:
+                      $ref: '#/components/schemas/Violations'
+            secrets:
+              allOf:
+                - $ref: '#/components/schemas/Assessment'
+                - properties:
+                    violations:
+                      $ref: '#/components/schemas/Violations'
+            tampering:
+              allOf:
+                - $ref: '#/components/schemas/Assessment'
+                - properties:
+                    violations:
+                      $ref: '#/components/schemas/Violations'
+            vulnerabilities:
+              allOf:
+                - $ref: '#/components/schemas/Assessment'
+                - properties:
+                    violations:
+                      $ref: '#/components/schemas/Violations'
+        checks:
+          type: array
+          description: Summary of all check types performed during analysis.
+          items:
+            $ref: '#/components/schemas/Check'
+        final:
+          type: boolean
+          example: true
+          description: Indicates if this scan causes the overall analysis status.
+        inhibitors:
+          $ref: '#/components/schemas/Inhibitors'
+        statistics:
+          $ref: '#/components/schemas/Statistics'
+    Artifact:
+      description: Basic information for the artifact that was scanned (the main package version artifact or the reproducible build artifact).
+      type: object
+      properties:
+        classification:
+          $ref: '#/components/schemas/Classification'
+        format:
+          description: 'File format of the analyzed software as identified by the Spectra Assure engine. Typically displayed as: *type/subtype/format:version*'
+          type: string
+          example: GZIP
+        hashes:
+          $ref: '#/components/schemas/Hashes'
+        name:
+          description: File name of the analyzed software.
+          type: string
+          example: my_file
+        path:
+          description: Location of the analyzed software component within the software package.
+          type: string
+          example: ''
+        size:
+          description: File size on disk of the analyzed software in bytes.
+          type: number
+          example: 210812
+        subtype:
+          description: 'File subtype as identified by the Spectra Assure engine. Typically displayed as: *type/subtype/format:version*'
+          type: string
+          example: Archive
+        type:
+          description: 'File type as identified by the Spectra Assure engine. Typically displayed as: *type/subtype/format:version*'
+          type: string
+          example: Binary
+        version:
+          description: 'Version string for the analyzed software. Typically displayed as: *type/subtype/format:version*. Version can be omitted for **Generic** values.'
+          type: string
+          example: Generic
+    Classification:
+      description: Classification of the analyzed software package unit.
+      properties:
+        result:
+          description: Resulting classification represented as a detection string conforming to the ReversingLabs Malware Naming Standard.
+          example: ''
+          type: string
+        status:
+          description: Threat detection status of the analyzed software package as a standalone unit of code. Any file classified as a threat will have the classification status set to either **Malicious** or **Suspicious**.
+          enum:
+            - Goodware
+            - Suspicious
+            - Malicious
+            - Unknown
+          example: Malicious
+          type: string
+      type: object
+    Check:
+      type: object
+      description: Details about each check type.
+      properties:
+        final:
+          type: boolean
+          example: true
+          description: Indicates if this check causes the overall scan status.
+        label:
+          description: Textual indicator displayed in Spectra Assure products to show the status of this check. The first two characters in the label indicate the check type. `LX` is used for software analysis with SAFE Levels enabled. `CI` is used for software analysis with SAFE Levels disabled. `RB` is used for reproducible build checks. `DF` is used for diffs.
+          type: string
+          example: L5:FAIL
+        reference:
+          description: Reference version used for diffing.
+          type: string
+          example: ab0f2461-58a9-49ea-99ee-042487921e43
+        status:
+          description: Indicates the status for this type of check.
+          type: string
+          example: fail
+        type:
+          description: Indicates the type of check. Software analysis is represented by `artifact-check`. Reproducible build check is represented by `repro-check`. Diff between two package versions is represented by `artifact-diff`.
+          enum:
+            - artifact-check
+            - artifact-diff
+            - repro-check
+          type: string
+          example: artifact-check
+    Inhibitors:
+      description: Provides the details for scans performed using **SAFE Levels**.
+      properties:
+        customized:
+          description: Indicates whether the scanning level has been customized by relaxing attainment requirements.
+          example: false
+          type: boolean
+        exclusions:
+          description: List of level attainment policies that have been disabled by configuration.
+          example:
+            SQ31102: 4
+          type: object
+        next_level:
+          description: Next **SAFE Level** the application can attain without failing the build.
+          example: 5
+          type: integer
+        scan_level:
+          description: Configured scan **SAFE Level**, used to perform the software package analysis.
+          example: 3
+          type: integer
+      type: object
+    Statistics:
+      type: object
+      description: Overall analysis statistics and quality.
+      properties:
+        components:
+          description: Number of software components detected in the analyzed package.
+          example: 9
+          type: integer
+        extracted:
+          description: Number of files extracted from the analyzed software package.
+          example: 363
+          type: integer
+        bad_checksum:
+          type: integer
+          description: Number of file integrity errors.
+          example: 0
+        bad_format:
+          type: integer
+          description: Number of file unpacking errors.
+          example: 0
+        bad_password:
+          type: integer
+          description: Number of password-protected files with an unknown password.
+          example: 0
+        unsupported:
+          type: integer
+          description: Number of files whose unpacking is not supported due to their [formats](https://docs.secure.software/concepts/filetypes#unsupported).
+          example: 0
+        quality:
+          allOf:
+            - $ref: '#/components/schemas/Quality'
+            - properties:
+                issues:
+                  type: object
+                  description: Software quality violations per severity level.
+                  properties:
+                    fail:
+                      description: Number of triggered policies with a "fail" status.
+                      type: integer
+                      example: 5
+                    high:
+                      description: Number of triggered high severity policies.
+                      type: integer
+                      example: 8
+                    low:
+                      description: Number of triggered low severity policies.
+                      type: integer
+                      example: 0
+                    medium:
+                      description: Number of triggered medium severity policies.
+                      type: integer
+                      example: 3
+                    pass:
+                      description: Number of triggered policies with a "pass" status.
+                      type: integer
+                      example: 34
+                    total:
+                      description: The total number of violations per policy. Corresponds to the number of policies triggered for each category.
+                      type: integer
+                      example: 11
+                    warning:
+                      description: Number of triggered policies that were overriden by user to "pass".
+                      type: integer
+                      example: 0
+        vulnerabilities:
+          allOf:
+            - $ref: '#/components/schemas/Vulnerabilities'
+            - properties:
+                exploit:
+                  description: Number of vulnerabilities detected in the analyzed software that have known existing exploits. Does not contribute to total count.
+                  example: 6
+                  type: integer
+                fixable:
+                  description: Number of vulnerabilities detected in the analyzed software for which a fix is available and can be applied. Does not contribute to total count.
+                  example: 4
+                  type: integer
+        licenses:
+          $ref: '#/components/schemas/Licenses'
+    Licenses:
+      type: object
+      description: Number of software licenses detected in the analyzed software. Statistics are grouped by license category.
+      properties:
+        copyleft:
+          description: Number of files with a copyleft license.
+          example: 4
+          type: integer
+        freemium:
+          description: Number of files with a freemium license.
+          example: 0
+          type: integer
+        freeware:
+          description: Number of files with a freeware license.
+          example: 1
+          type: integer
+        non-commercial:
+          description: Number of files with a non-commercial license.
+          example: 0
+          type: integer
+        permissive:
+          description: Number of files with a permissive license.
+          example: 7
+          type: integer
+        proprietary:
+          description: Number of files with a proprietary license.
+          example: 1
+          type: integer
+        public_domain:
+          description: Number of files with a public license.
+          example: 1
+          type: integer
+        shareware:
+          description: Number of files with a shareware license.
+          example: 0
+          type: integer
+        undeclared:
+          description: Number of components or dependencies whose license is unknown.
+          example: 0
+          type: integer
+        weak_copyleft:
+          description: Number of files with a weak copyleft license.
+          example: 3
+          type: integer
+    Quality:
+      type: object
+      description: Software package issue statistics.
+      properties:
+        metrics:
+          allOf:
+            - $ref: '#/components/schemas/Metrics'
+            - properties:
+                fail:
+                  description: Number of files or components that triggered a failing policy.
+                  type: integer
+                  example: 5
+                pass:
+                  description: Number of files or components with the "pass" status.
+                  type: integer
+                  example: 34
+                warning:
+                  description: Number of files or components that triggered a policy that was overriden by user to "pass".
+                  type: integer
+                  example: 0
+        priority:
+          description: Highest priority issue in the analyzed package.
+          example: 0
+          type: integer
+        status:
+          description: CI/CD status recommendation.
+          example: fail
+          type: string
+    Metrics:
+      type: object
+      description: Software quality metrics per severity level.
+      properties:
+        high:
+          description: Number of files or components with high severity issues.
+          type: integer
+          example: 8
+        low:
+          description: Number of files or components with low severity issues.
+          type: integer
+          example: 0
+        medium:
+          description: Number of files or components with medium severity issues.
+          type: integer
+          example: 3
+        total:
+          description: The total number of violations per file or component. Corresponds to the number of files or components with detected policy violations.
+          type: integer
+          example: 11
+    Vulnerabilities:
+      type: object
+      description: Number of vulnerabilities detected in the analyzed software. Statistics are grouped by vulnerability severity and type, and as total count of all vulnerabilities found.
+      properties:
+        critical:
+          description: Number of critical severity vulnerabilities detected in the analyzed software.
+          example: 0
+          type: integer
+        high:
+          description: Number of high severity vulnerabilities detected in the analyzed software.
+          example: 4
+          type: integer
+        low:
+          description: Number of low severity vulnerabilities detected in the analyzed software.
+          example: 0
+          type: integer
+        malware:
+          description: Number of vulnerabilities detected in the analyzed software that are actively exploited by malware. Does not contribute to total count.
+          example: 0
+          type: integer
+        mandate:
+          description: Number of patch-mandated vulnerabilities detected in the analyzed software. Does not contribute to total count.
+          example: 0
+          type: integer
+        medium:
+          description: Number of medium severity vulnerabilities detected in the analyzed software.
+          example: 0
+          type: integer
+        named:
+          description: Number of vulnerabilities with named CVE aliases found in the analyzed software. Does not contribute to total count.
+          example: 0
+          type: integer
+        total:
+          description: Total number of vulnerabilities detected in the analyzed software.
+          example: 7
+          type: integer
+        triaged:
+          description: Number of vulnerabilities triaged as not affecting the analyzed software.
+          example: 3
+          type: integer
+    SoftwareCategory:
+      description: Categorization scheme for software based on their typical use or general purpose.
+      type: string
+      enum:
+        - Other
+        - Ad
+        - Social
+        - Graphics
+        - Audio
+        - Cloud
+        - Messaging
+        - Compression
+        - Analytics
+        - Database
+        - Crypto
+        - Utility
+        - Multimedia
+        - Networking
+        - Browser
+        - Security
+        - Virtualization
+        - Development
+        - Productivity
+        - Email
+        - Gaming
+        - Entertainment
+        - Educational
+        - Driver
+        - Package
+        - Medical
+        - Financial
+        - Management
+        - Administration
+        - Telecommunication
+        - Logistics
+        - Insurance
+        - Trading
+        - Retail
+        - Manufacturing
+        - Specialized
+        - None
+    SoftwareLicense:
+      description: SPDX-compliant license name under which the software is distributed.
+      type: string
+      enum:
+        - Unknown
+        - BSD Zero Clause License
+        - Attribution Assurance License
+        - Abstyles License
+        - Adobe Systems Incorporated Source Code License Agreement
+        - Adobe Glyph List License
+        - Amazon Digital Services License
+        - Academic Free License v1.1
+        - Academic Free License v1.2
+        - Academic Free License v2.0
+        - Academic Free License v2.1
+        - Academic Free License v3.0
+        - Afmparse License
+        - Affero General Public License v1.0 only
+        - Affero General Public License v1.0 or later
+        - GNU Affero General Public License v3.0 only
+        - GNU Affero General Public License v3.0 or later
+        - Aladdin Free Public License
+        - AMD's plpa_map.c License
+        - Apple MIT License
+        - Academy of Motion Picture Arts and Sciences BSD
+        - ANTLR Software Rights Notice
+        - ANTLR Software Rights Notice with license fallback
+        - Apache License 1.0
+        - Apache License 1.1
+        - Apache License 2.0
+        - Adobe Postscript AFM License
+        - Adaptive Public License 1.0
+        - App::s2p License
+        - Apple Public Source License 1.0
+        - Apple Public Source License 1.1
+        - Apple Public Source License 1.2
+        - Apple Public Source License 2.0
+        - Arphic Public License
+        - Artistic License 1.0
+        - Artistic License 1.0 w/clause 8
+        - Artistic License 1.0 (Perl)
+        - Artistic License 2.0
+        - Baekmuk License
+        - Bahyph License
+        - Barr License
+        - Beerware License
+        - Bitstream Vera Font License
+        - BitTorrent Open Source License v1.0
+        - BitTorrent Open Source License v1.1
+        - SQLite Blessing
+        - Blue Oak Model License 1.0.0
+        - Borceux license
+        - BSD 1-Clause License
+        - BSD 2-Clause "Simplified" License
+        - BSD-2-Clause Plus Patent License
+        - BSD 2-Clause with views sentence
+        - BSD 3-Clause "New" or "Revised" License
+        - BSD with attribution
+        - BSD 3-Clause Clear License
+        - Lawrence Berkeley National Labs BSD variant license
+        - BSD 3-Clause Modification
+        - BSD 3-Clause No Military License
+        - BSD 3-Clause No Nuclear License
+        - BSD 3-Clause No Nuclear License 2014
+        - BSD 3-Clause No Nuclear Warranty
+        - BSD 3-Clause Open MPI variant
+        - BSD 4-Clause "Original" or "Old" License
+        - BSD 4 Clause Shortened
+        - BSD-4-Clause (University of California-Specific)
+        - BSD Protection License
+        - BSD Source Code Attribution
+        - Boost Software License 1.0
+        - Business Source License 1.1
+        - bzip2 and libbzip2 License v1.0.6
+        - Computational Use of Data Agreement v1.0
+        - Cryptographic Autonomy License 1.0
+        - Cryptographic Autonomy License 1.0 (Combined Work Exception)
+        - Caldera License
+        - Computer Associates Trusted Open Source License 1.1
+        - Creative Commons Attribution 1.0 Generic
+        - Creative Commons Attribution 2.0 Generic
+        - Creative Commons Attribution 2.5 Generic
+        - Creative Commons Attribution 2.5 Australia
+        - Creative Commons Attribution 3.0 Unported
+        - Creative Commons Attribution 3.0 Austria
+        - Creative Commons Attribution 3.0 Germany
+        - Creative Commons Attribution 3.0 Netherlands
+        - Creative Commons Attribution 3.0 United States
+        - Creative Commons Attribution 4.0 International
+        - Creative Commons Attribution Non Commercial 1.0 Generic
+        - Creative Commons Attribution Non Commercial 2.0 Generic
+        - Creative Commons Attribution Non Commercial 2.5 Generic
+        - Creative Commons Attribution Non Commercial 3.0 Unported
+        - Creative Commons Attribution Non Commercial 3.0 Germany
+        - Creative Commons Attribution Non Commercial 4.0 International
+        - Creative Commons Attribution Non Commercial No Derivatives 1.0 Generic
+        - Creative Commons Attribution Non Commercial No Derivatives 2.0 Generic
+        - Creative Commons Attribution Non Commercial No Derivatives 2.5 Generic
+        - Creative Commons Attribution Non Commercial No Derivatives 3.0 Unported
+        - Creative Commons Attribution Non Commercial No Derivatives 3.0 Germany
+        - Creative Commons Attribution Non Commercial No Derivatives 3.0 IGO
+        - Creative Commons Attribution Non Commercial No Derivatives 4.0 International
+        - Creative Commons Attribution Non Commercial Share Alike 1.0 Generic
+        - Creative Commons Attribution Non Commercial Share Alike 2.0 Generic
+        - Creative Commons Attribution-NonCommercial-ShareAlike 2.0 France
+        - Creative Commons Attribution Non Commercial Share Alike 2.0 England and Wales
+        - Creative Commons Attribution Non Commercial Share Alike 2.5 Generic
+        - Creative Commons Attribution Non Commercial Share Alike 3.0 Unported
+        - Creative Commons Attribution Non Commercial Share Alike 3.0 Germany
+        - Creative Commons Attribution Non Commercial Share Alike 3.0 IGO
+        - Creative Commons Attribution Non Commercial Share Alike 4.0 International
+        - Creative Commons Attribution No Derivatives 1.0 Generic
+        - Creative Commons Attribution No Derivatives 2.0 Generic
+        - Creative Commons Attribution No Derivatives 2.5 Generic
+        - Creative Commons Attribution No Derivatives 3.0 Unported
+        - Creative Commons Attribution No Derivatives 3.0 Germany
+        - Creative Commons Attribution No Derivatives 4.0 International
+        - Creative Commons Attribution Share Alike 1.0 Generic
+        - Creative Commons Attribution Share Alike 2.0 Generic
+        - Creative Commons Attribution Share Alike 2.0 England and Wales
+        - Creative Commons Attribution Share Alike 2.1 Japan
+        - Creative Commons Attribution Share Alike 2.5 Generic
+        - Creative Commons Attribution Share Alike 3.0 Unported
+        - Creative Commons Attribution Share Alike 3.0 Austria
+        - Creative Commons Attribution Share Alike 3.0 Germany
+        - Creative Commons Attribution Share Alike 4.0 International
+        - Creative Commons Public Domain Dedication and Certification
+        - Creative Commons Zero v1.0 Universal
+        - Common Development and Distribution License 1.0
+        - Common Development and Distribution License 1.1
+        - Common Documentation License 1.0
+        - Community Data License Agreement Permissive 1.0
+        - Community Data License Agreement Permissive 2.0
+        - Community Data License Agreement Sharing 1.0
+        - CeCILL Free Software License Agreement v1.0
+        - CeCILL Free Software License Agreement v1.1
+        - CeCILL Free Software License Agreement v2.0
+        - CeCILL Free Software License Agreement v2.1
+        - CeCILL-B Free Software License Agreement
+        - CeCILL-C Free Software License Agreement
+        - CERN Open Hardware Licence v1.1
+        - CERN Open Hardware Licence v1.2
+        - CERN Open Hardware Licence Version 2 - Permissive
+        - CERN Open Hardware Licence Version 2 - Strongly Reciprocal
+        - CERN Open Hardware Licence Version 2 - Weakly Reciprocal
+        - Clarified Artistic License
+        - CNRI Jython License
+        - CNRI Python License
+        - CNRI Python Open Source GPL Compatible License Agreement
+        - Copyfree Open Innovation License
+        - Community Specification License 1.0
+        - Condor Public License v1.1
+        - copyleft-next 0.3.0
+        - copyleft-next 0.3.1
+        - Common Public Attribution License 1.0
+        - Common Public License 1.0
+        - Code Project Open License 1.02
+        - Crossword License
+        - CrystalStacker License
+        - CUA Office Public License v1.0
+        - Cube License
+        - curl License
+        - Deutsche Freie Software Lizenz
+        - diffmark license
+        - Data licence Germany – attribution – version 2.0
+        - DOC License
+        - Dotseqn License
+        - Detection Rule License 1.0
+        - DSDP License
+        - dvipdfm License
+        - Educational Community License v1.0
+        - Educational Community License v2.0
+        - Eiffel Forum License v1.0
+        - Eiffel Forum License v2.0
+        - eGenix.com Public License 1.1.0
+        - Elastic License 2.0
+        - Entessa Public License v1.0
+        - EPICS Open License
+        - Eclipse Public License 1.0
+        - Eclipse Public License 2.0
+        - Erlang Public License v1.1
+        - Etalab Open License 2.0
+        - EU DataGrid Software License
+        - European Union Public License 1.0
+        - European Union Public License 1.1
+        - European Union Public License 1.2
+        - Eurosym License
+        - Fair License
+        - Fraunhofer FDK AAC Codec Library
+        - Frameworx Open License 1.0
+        - FreeBSD Documentation License
+        - FreeImage Public License v1.0
+        - FSF All Permissive License
+        - FSF Unlimited License
+        - FSF Unlimited License (with License Retention)
+        - Freetype Project License
+        - GD License
+        - GNU Free Documentation License v1.1 only - invariants
+        - GNU Free Documentation License v1.1 or later - invariants
+        - GNU Free Documentation License v1.1 only - no invariants
+        - GNU Free Documentation License v1.1 or later - no invariants
+        - GNU Free Documentation License v1.1 only
+        - GNU Free Documentation License v1.1 or later
+        - GNU Free Documentation License v1.2 only - invariants
+        - GNU Free Documentation License v1.2 or later - invariants
+        - GNU Free Documentation License v1.2 only - no invariants
+        - GNU Free Documentation License v1.2 or later - no invariants
+        - GNU Free Documentation License v1.2 only
+        - GNU Free Documentation License v1.2 or later
+        - GNU Free Documentation License v1.3 only - invariants
+        - GNU Free Documentation License v1.3 or later - invariants
+        - GNU Free Documentation License v1.3 only - no invariants
+        - GNU Free Documentation License v1.3 or later - no invariants
+        - GNU Free Documentation License v1.3 only
+        - GNU Free Documentation License v1.3 or later
+        - Giftware License
+        - GL2PS License
+        - 3dfx Glide License
+        - Glulxe License
+        - Good Luck With That Public License
+        - gnuplot License
+        - GNU General Public License v1.0 only
+        - GNU General Public License v1.0 or later
+        - GNU General Public License v2.0 only
+        - GNU General Public License v2.0 or later
+        - GNU General Public License v3.0 only
+        - GNU General Public License v3.0 or later
+        - gSOAP Public License v1.3b
+        - Haskell Language Report License
+        - Hippocratic License 2.1
+        - Historical Permission Notice and Disclaimer
+        - Historical Permission Notice and Disclaimer - sell variant
+        - HTML Tidy License
+        - IBM PowerPC Initialization and Boot Software
+        - ICU License
+        - Independent JPEG Group License
+        - ImageMagick License
+        - iMatix Standard Function Library Agreement
+        - Imlib2 License
+        - Info-ZIP License
+        - Intel Open Source License
+        - Intel ACPI Software License Agreement
+        - Interbase Public License v1.0
+        - IPA Font License
+        - IBM Public License v1.0
+        - ISC License
+        - Jam License
+        - JasPer License
+        - Japan Network Information Center License
+        - JSON License
+        - KiCad Libraries Exception
+        - Licence Art Libre 1.2
+        - Licence Art Libre 1.3
+        - Latex2e License
+        - Leptonica License
+        - GNU Library General Public License v2 only
+        - GNU Library General Public License v2 or later
+        - GNU Lesser General Public License v2.1 only
+        - GNU Lesser General Public License v2.1 or later
+        - GNU Lesser General Public License v3.0 only
+        - GNU Lesser General Public License v3.0 or later
+        - Lesser General Public License For Linguistic Resources
+        - libpng License
+        - PNG Reference Library version 2
+        - libselinux public domain notice
+        - libtiff License
+        - Licence Libre du Québec – Permissive version 1.1
+        - Licence Libre du Québec – Réciprocité version 1.1
+        - Licence Libre du Québec – Réciprocité forte version 1.1
+        - Linux man-pages Copyleft
+        - Linux Kernel Variant of OpenIB.org license
+        - Lucent Public License Version 1.0
+        - Lucent Public License v1.02
+        - LaTeX Project Public License v1.0
+        - LaTeX Project Public License v1.1
+        - LaTeX Project Public License v1.2
+        - LaTeX Project Public License v1.3a
+        - LaTeX Project Public License v1.3c
+        - MakeIndex License
+        - The MirOS Licence
+        - MIT License
+        - MIT No Attribution
+        - Enlightenment License (e16)
+        - CMU License
+        - enna License
+        - feh License
+        - MIT License Modern Variant
+        - MIT Open Group variant
+        - MIT +no-false-attribs license
+        - Motosoto License
+        - mpich2 License
+        - Mozilla Public License 1.0
+        - Mozilla Public License 1.1
+        - Mozilla Public License 2.0
+        - Mozilla Public License 2.0 (no copyleft exception)
+        - mplus Font License
+        - Microsoft Public License
+        - Microsoft Reciprocal License
+        - Matrix Template Library License
+        - Mulan Permissive Software License, Version 1
+        - Mulan Permissive Software License, Version 2
+        - Multics License
+        - Mup License
+        - Nara Institute of Science and Technology License (2003)
+        - NASA Open Source Agreement 1.3
+        - Naumen Public License
+        - Net Boolean Public License v1
+        - Non-Commercial Government Licence
+        - University of Illinois/NCSA Open Source License
+        - Net-SNMP License
+        - NetCDF license
+        - Newsletr License
+        - Nethack General Public License
+        - NIST Public Domain Notice
+        - NIST Public Domain Notice with license fallback
+        - Norwegian Licence for Open Government Data (NLOD) 1.0
+        - Norwegian Licence for Open Government Data (NLOD) 2.0
+        - No Limit Public License
+        - Nokia Open Source License
+        - Netizen Open Source License
+        - Noweb License
+        - Netscape Public License v1.0
+        - Netscape Public License v1.1
+        - Non-Profit Open Software License 3.0
+        - NRL License
+        - NTP License
+        - NTP No Attribution
+        - Open Use of Data Agreement v1.0
+        - Open CASCADE Technology Public License
+        - OCLC Research Public License 2.0
+        - Open Data Commons Open Database License v1.0
+        - Open Data Commons Attribution License v1.0
+        - SIL Open Font License 1.0
+        - SIL Open Font License 1.0 with no Reserved Font Name
+        - SIL Open Font License 1.0 with Reserved Font Name
+        - SIL Open Font License 1.1
+        - SIL Open Font License 1.1 with no Reserved Font Name
+        - SIL Open Font License 1.1 with Reserved Font Name
+        - OGC Software License, Version 1.0
+        - Taiwan Open Government Data License, version 1.0
+        - Open Government Licence - Canada
+        - Open Government Licence v1.0
+        - Open Government Licence v2.0
+        - Open Government Licence v3.0
+        - Open Group Test Suite License
+        - Open LDAP Public License v1.1
+        - Open LDAP Public License v1.2
+        - Open LDAP Public License v1.3
+        - Open LDAP Public License v1.4
+        - Open LDAP Public License v2.0 (or possibly 2.0A and 2.0B)
+        - Open LDAP Public License v2.0.1
+        - Open LDAP Public License v2.1
+        - Open LDAP Public License v2.2
+        - Open LDAP Public License v2.2.1
+        - Open LDAP Public License 2.2.2
+        - Open LDAP Public License v2.3
+        - Open LDAP Public License v2.4
+        - Open LDAP Public License v2.5
+        - Open LDAP Public License v2.6
+        - Open LDAP Public License v2.7
+        - Open LDAP Public License v2.8
+        - Open Market License
+        - OpenSSL License
+        - Open Public License v1.0
+        - Open Publication License v1.0
+        - OSET Public License version 2.1
+        - Open Software License 1.0
+        - Open Software License 1.1
+        - Open Software License 2.0
+        - Open Software License 2.1
+        - Open Software License 3.0
+        - The Parity Public License 6.0.0
+        - The Parity Public License 7.0.0
+        - Open Data Commons Public Domain Dedication & License 1.0
+        - PHP License v3.0
+        - PHP License v3.01
+        - Plexus Classworlds License
+        - PolyForm Noncommercial License 1.0.0
+        - PolyForm Small Business License 1.0.0
+        - PostgreSQL License
+        - Python Software Foundation License 2.0
+        - psfrag License
+        - psutils License
+        - Python License 2.0
+        - Qhull License
+        - Q Public License 1.0
+        - Rdisc License
+        - Red Hat eCos Public License v1.1
+        - Reciprocal Public License 1.1
+        - Reciprocal Public License 1.5
+        - RealNetworks Public Source License v1.0
+        - RSA Message-Digest License
+        - Ricoh Source Code Public License
+        - Ruby License
+        - Sax Public Domain Notice
+        - Saxpath License
+        - SCEA Shared Source License
+        - Scheme Language Report License
+        - Sendmail License
+        - Sendmail License 8.23
+        - SGI Free Software License B v1.0
+        - SGI Free Software License B v1.1
+        - SGI Free Software License B v2.0
+        - Solderpad Hardware License v0.5
+        - Solderpad Hardware License, Version 0.51
+        - Simple Public License 2.0
+        - Sun Industry Standards Source License v1.1
+        - Sun Industry Standards Source License v1.2
+        - Sleepycat License
+        - Standard ML of New Jersey License
+        - Secure Messaging Protocol Public License
+        - SNIA Public License 1.1
+        - Spencer License 86
+        - Spencer License 94
+        - Spencer License 99
+        - Sun Public License v1.0
+        - SSH OpenSSH license
+        - SSH short notice
+        - Server Side Public License, v 1
+        - SugarCRM Public License v1.1.3
+        - Scheme Widget Library (SWL) Software License Agreement
+        - TAPR Open Hardware License v1.0
+        - TCL/TK License
+        - TCP Wrappers License
+        - TMate Open Source License
+        - TORQUE v2.5+ Software License v1.1
+        - Trusster Open Source License
+        - Technische Universitaet Berlin License 1.0
+        - Technische Universitaet Berlin License 2.0
+        - Upstream Compatibility License v1.0
+        - Unicode License Agreement - Data Files and Software (2015)
+        - Unicode License Agreement - Data Files and Software (2016)
+        - Unicode Terms of Use
+        - The Unlicense
+        - Universal Permissive License v1.0
+        - Vim License
+        - VOSTROM Public License for Open Source
+        - Vovida Software License v1.0
+        - W3C Software Notice and License (2002-12-31)
+        - W3C Software Notice and License (1998-07-20)
+        - W3C Software Notice and Document License (2015-05-13)
+        - Sybase Open Watcom Public License 1.0
+        - Wsuipa License
+        - Do What The F*ck You Want To Public License
+        - X11 License
+        - X11 License Distribution Modification Variant
+        - Xerox License
+        - XFree86 License 1.1
+        - xinetd License
+        - X.Net License
+        - XPP License
+        - XSkat License
+        - Yahoo! Public License v1.0
+        - Yahoo! Public License v1.1
+        - Zed License
+        - Zend License v2.0
+        - Zimbra Public License v1.3
+        - Zimbra Public License v1.4
+        - zlib License
+        - zlib/libpng License with Acknowledgement
+        - Zope Public License 1.1
+        - Zope Public License 2.0
+        - Zope Public License 2.1
+    SoftwarePlatform:
+      description: Underlying technology or framework that the software has been developed to run on.
+      type: string
+      enum:
+        - Other
+        - Windows
+        - Linux
+        - MacOS
+        - Containers
+        - Browser
+        - Mobile
+    UUID:
+      type: string
+      description: "Automatically generated unique identifier."
+      format: uuid
+      example: "593ea5fd-a588-4790-bb60-ce5648d19a83"
+    Date:
+      type: string
+      format: date
+      example: '2025-01-20'
+    DateTime:
+      type: string
+      format: date-time
+      example: '2022-07-15T13:57:39.843631Z'
+    Messages:
+      type: object
+      required:
+        - message
+      properties:
+        message:
+          type: string
+    Error:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: string
+    SoftwareInfo:
+      type: object
+      required:
+        - product
+        - version
+        - publisher
+        - category
+        - license
+        - platform
+        - release_date
+      properties:
+        product:
+          type: string
+          nullable: true
+          example: Inno Setup
+        version:
+          type: string
+          example: 5.5.8
+        publisher:
+          type: string
+          nullable: true
+          example: jrsoftware.org
+          default: Unknown
+        category:
+          type: string
+          example: Other
+          default: Other
+        license:
+          type: string
+          example: Unknown
+          default: Unknown
+        platform:
+          type: string
+          example: Windows
+          default: Other
+        release_date:
+          allOf:
+            - $ref: "#/components/schemas/DateTime"
+            - nullable: true
+    ApprovalStatusDisplay:
+      type: string
+      description: "Approval status for the requested package version."
+      enum:
+        - Undetermined
+        - Approved
+        - ApprovalRejected
+        - ApprovalRevoked
+    OrganizationRole:
+      type: string
+      enum:
+        - RlSupport
+        - OrganizationAdmin
+        - OrganizationMember
+        - Security
+        - TrialOrganizationMember
+      example: OrganizationMember
+      default: OrganizationMember
+    GroupRole:
+      type: string
+      enum:
+        - GroupOwner
+        - GroupMember
+        - TrialGroupMember
+      example: GroupOwner
+      default: GroupMember
+    ApprovalStatusInformation:
+      type: object
+      required:
+        - reason
+        - user
+        - role
+        - timestamp
+      properties:
+        reason:
+          description: "Reason for the current approval status of the requested package version. This information is provided for auditing purposes."
+          type: string
+          example: Rejected because of valid reasons
+        timestamp:
+          $ref: "#/components/schemas/DateTime"
+        user:
+          description: "Name of the user who set the current approval status for the requested package version. This information is provided for auditing purposes."
+          type: string
+          example: user@foo.bar
+          nullable: true
+        role:
+          oneOf:
+            - $ref: '#/components/schemas/OrganizationRole'
+            - $ref: '#/components/schemas/GroupRole'
+          example: GroupOwner
+          nullable: true
+          description: "Current role of the user who set the approval status for the requested package version. This role is not necessarily the same as it was when the approval status was set."
+  parameters:
+    organization:
+      in: path
+      name: organization
+      required: true
+      schema:
+        type: string
+        example: example-organization
+        description: Specify the name of a Portal organization to use in the request. The user account that is sending the request must be a member of the specified organization and have the appropriate permissions to perform the requested operation. Organization names are case-sensitive.
+    group:
+      in: path
+      name: group
+      required: true
+      schema:
+        type: string
+        example: example-group
+        description: Specify the name of a Portal group to use in the request. The group must exist in the specified Portal organization. Group names are case-sensitive.
+    project:
+      in: path
+      name: project
+      required: true
+      schema:
+        type: string
+        example: example-project
+        description: Specify the name of a Portal project to use in the request. Project names are case-sensitive. Special characters `\/:*?"<>|` are not supported.
+    package:
+      in: path
+      name: package
+      required: true
+      schema:
+        type: string
+        example: example-package
+        description: Specify the name of a Portal package to use in the request. Package names are case-sensitive. Special characters `\/:*?"<>|` are not supported.
+    version:
+      in: path
+      name: version
+      required: true
+      schema:
+        type: string
+        example: 1.2.0
+        description: Specify the name of a Portal package version to use in the request. Version names are case-sensitive. Special characters `\/:*?"<>|` are not supported.
+    build:
+      in: query
+      name: build
+      required: false
+      description: This optional parameter should be used when working with reproducible builds. Specify if the request should apply to the main artifact (`version`) or to the reproducible build artifact (`repro`). Only one of the two supported values can be specified per request.
+      schema:
+        type: string
+        enum: [repro, version]
+        default: version
+    download:
+      in: query
+      name: download
+      required: false
+      description: Returns a short-lived link where you can download the main version artifact or the reproducible build artifact. Use the `build` parameter in the request to specify the artifact to download. The link is valid for 60 seconds. **The link generation affects the Portal Download Capacity even if the artifact is not downloaded.**
+      schema:
+        type: boolean
+        default: false
+  securitySchemes:
+    TokenAuthentication:
+      type: http
+      scheme: bearer
+
+  responses:
+    BadRequest:
+      description: Bad request
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          examples:
+            NoOrganization:
+              value:
+                error: Organization with provided reference does not exist
+            NoGroup:
+              value:
+                error: Group with provided reference does not exist
+            UnsupportedCharacter:
+              value:
+                error: Resource name contains one or more of the following forbidden characters \/:*?"<>|
+    Unauthorized:
+      description: Not authorized
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          examples:
+            NoToken:
+              value:
+                error: Authentication credentials were not provided
+            WrongToken:
+              value:
+                error: Invalid token
+    InsufficientRemainingCapacity:
+      description: Insufficient remaining capacity
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          examples:
+            PaymentRequired:
+              value:
+                error: Insufficient remaining capacity
+    Forbidden:
+      description: Forbidden
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    TooManyRequests:
+      description: Too many requests
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    ServerError:
+      description: Internal server error
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    NotFound:
+      description: Not found
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    NoAnalysis:
+      description: Accepted
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Messages'
+          examples:
+            VersionNotDoneWithAnalysis:
+              value:
+                message: Cannot get report for version that is not done with analysis
+            VersionWithNoCompleteAnalysis:
+              value:
+                message: Cannot get report for version that does not have complete analysis
+    NoReport:
+      description: Not found
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          examples:
+            VersionDoesntExist:
+              value:
+                error: Provided version doesn't exist
+            VersionDoesntHaveRepro:
+              value:
+                error: Provided version does not have a reproducible build
