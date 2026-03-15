@@ -60,7 +60,7 @@ class Config:
         if len(self.api_token) > 8:
             masked_token = self.api_token[:4] + "****" + self.api_token[-4:]
         else:
-            masked_token = "****"
+            masked_token = "****"  # nosec B105 — this is a mask, not a password
         logger.info("Configuration:")
         logger.info("  Base URL:              %s", self.base_url)
         logger.info("  Organization:          %s", self.org)
