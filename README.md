@@ -39,7 +39,8 @@ All configuration is via environment variables. No config files are needed.
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `SPECTRA_BASE_URL` | Yes | — | Full portal URL including your org name, e.g. `https://my.secure.software/acme-corp` |
+| `SPECTRA_ASSURE_BASE_URL` | Yes | — | Portal URL, e.g. `https://my.secure.software/acme-corp`. The org can be in the path, derived from the subdomain, or set explicitly via `SPECTRA_ASSURE_ORG` |
+| `SPECTRA_ASSURE_ORG` | No | — | Override the organization name. When set, the org is not parsed from the URL. Useful for instances like `https://example.secure.software` |
 | `SPECTRA_API_TOKEN` | Yes | — | Personal access token (PAT) for Bearer auth |
 | `STALE_THRESHOLD_DAYS` | No | `180` | Minimum age in days. Packages where every version was last analyzed more than this many days ago are eligible for deletion |
 | `CLEANUP_INTERVAL_HOURS` | No | `24` | Hours between cleanup cycles. Set to `0` for a single run then exit |
@@ -57,27 +58,33 @@ docker build -t assure-package-cleaner .
 
 # Dry run (default) — logs what would be deleted, deletes nothing
 docker run --rm \
-  -e SPECTRA_BASE_URL=https://my.secure.software/acme-corp \
+  -e SPECTRA_ASSURE_BASE_URL=https://my.secure.software/acme-corp \
   -e SPECTRA_API_TOKEN=your-token-here \
   assure-package-cleaner
 
 # Live run — actually deletes stale packages
 docker run --rm \
-  -e SPECTRA_BASE_URL=https://my.secure.software/acme-corp \
+  -e SPECTRA_ASSURE_BASE_URL=https://my.secure.software/acme-corp \
   -e SPECTRA_API_TOKEN=your-token-here \
   -e DRY_RUN=false \
   assure-package-cleaner
 
 # Single run then exit (no periodic loop)
 docker run --rm \
-  -e SPECTRA_BASE_URL=https://my.secure.software/acme-corp \
+  -e SPECTRA_ASSURE_BASE_URL=https://my.secure.software/acme-corp \
   -e SPECTRA_API_TOKEN=your-token-here \
   -e CLEANUP_INTERVAL_HOURS=0 \
   assure-package-cleaner
 
+# Org-less URL — org derived from subdomain (becomes "Example")
+docker run --rm \
+  -e SPECTRA_ASSURE_BASE_URL=https://example.secure.software \
+  -e SPECTRA_API_TOKEN=your-token-here \
+  assure-package-cleaner
+
 # Custom threshold — delete packages not analyzed in the last year
 docker run --rm \
-  -e SPECTRA_BASE_URL=https://my.secure.software/acme-corp \
+  -e SPECTRA_ASSURE_BASE_URL=https://my.secure.software/acme-corp \
   -e SPECTRA_API_TOKEN=your-token-here \
   -e STALE_THRESHOLD_DAYS=365 \
   -e DRY_RUN=false \
@@ -99,7 +106,7 @@ source .venv/bin/activate
 pip install -e .
 
 # Set required environment variables
-export SPECTRA_BASE_URL=https://my.secure.software/acme-corp
+export SPECTRA_ASSURE_BASE_URL=https://my.secure.software/acme-corp
 export SPECTRA_API_TOKEN=your-token-here
 
 # Run (dry-run mode by default)

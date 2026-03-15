@@ -27,15 +27,18 @@ class Config:
 
     @classmethod
     def from_env(cls) -> Config:
-        base_url_raw = os.environ.get("SPECTRA_BASE_URL", "").strip()
+        base_url_raw = os.environ.get("SPECTRA_ASSURE_BASE_URL", "").strip()
         if not base_url_raw:
-            raise ConfigError("SPECTRA_BASE_URL is required")
+            raise ConfigError("SPECTRA_ASSURE_BASE_URL is required")
 
         api_token = os.environ.get("SPECTRA_API_TOKEN", "").strip()
         if not api_token:
             raise ConfigError("SPECTRA_API_TOKEN is required")
 
-        base_url, org = _parse_base_url(base_url_raw)
+        org_override_raw = os.environ.get("SPECTRA_ASSURE_ORG", "").strip()
+        org_override = org_override_raw if org_override_raw else None
+
+        base_url, org = _parse_base_url(base_url_raw, org_override=org_override)
 
         stale_threshold_days = _parse_int("STALE_THRESHOLD_DAYS", 180, minimum=1)
         cleanup_interval_hours = _parse_int("CLEANUP_INTERVAL_HOURS", 24, minimum=0)
@@ -72,12 +75,13 @@ class Config:
         logger.info("  Log level:             %s", self.log_level)
 
 
-def _parse_base_url(raw: str) -> tuple[str, str]:
+def _parse_base_url(raw: str, *, org_override: str | None = None) -> tuple[str, str]:
     """Extract the API base URL and org from a portal URL.
 
-    Accepts formats like:
-        https://my.secure.software/acme-corp
-        my.secure.software/acme-corp
+    Org resolution priority:
+        1. org_override (from SPECTRA_ASSURE_ORG env var)
+        2. First path segment from URL (e.g. /acme-corp)
+        3. Subdomain extraction: first label of hostname, capitalized
     """
     if not raw.startswith(("http://", "https://")):
         raw = "https://" + raw
@@ -85,13 +89,23 @@ def _parse_base_url(raw: str) -> tuple[str, str]:
     parsed = urlparse(raw)
     path_parts = [p for p in parsed.path.strip("/").split("/") if p]
 
-    if not path_parts:
-        raise ConfigError(
-            "SPECTRA_BASE_URL must include the organization path, "
-            "e.g. https://my.secure.software/acme-corp"
-        )
+    if org_override:
+        org = org_override
+    elif path_parts:
+        org = path_parts[0]
+    else:
+        # Subdomain fallback: first label of hostname, capitalized
+        hostname = parsed.hostname or ""
+        parts = hostname.split(".")
+        if len(parts) >= 2 and parts[0]:
+            org = parts[0].capitalize()
+        else:
+            raise ConfigError(
+                "Cannot determine organization. Either include the org in the URL path "
+                "(e.g. https://my.secure.software/acme-corp), or set the SPECTRA_ASSURE_ORG "
+                "environment variable."
+            )
 
-    org = path_parts[0]
     base_url = f"{parsed.scheme}://{parsed.netloc}/api/public/v1"
 
     return base_url, org

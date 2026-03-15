@@ -13,7 +13,7 @@ from assure_package_cleaner.config import Config, ConfigError, _parse_base_url
 # ---------------------------------------------------------------------------
 
 _REQUIRED_ENV = {
-    "SPECTRA_BASE_URL": "https://my.secure.software/acme-corp",
+    "SPECTRA_ASSURE_BASE_URL": "https://my.secure.software/acme-corp",
     "SPECTRA_API_TOKEN": "tok_1234567890abcdef",
 }
 
@@ -32,22 +32,22 @@ def _env(**overrides: str) -> dict[str, str]:
 class TestRequiredEnvVars:
     def test_missing_base_url_raises(self):
         with patch.dict("os.environ", {"SPECTRA_API_TOKEN": "tok"}, clear=True):
-            with pytest.raises(ConfigError, match="SPECTRA_BASE_URL is required"):
+            with pytest.raises(ConfigError, match="SPECTRA_ASSURE_BASE_URL is required"):
                 Config.from_env()
 
     def test_empty_base_url_raises(self):
         with patch.dict(
             "os.environ",
-            {"SPECTRA_BASE_URL": "", "SPECTRA_API_TOKEN": "tok"},
+            {"SPECTRA_ASSURE_BASE_URL": "", "SPECTRA_API_TOKEN": "tok"},
             clear=True,
         ):
-            with pytest.raises(ConfigError, match="SPECTRA_BASE_URL is required"):
+            with pytest.raises(ConfigError, match="SPECTRA_ASSURE_BASE_URL is required"):
                 Config.from_env()
 
     def test_missing_api_token_raises(self):
         with patch.dict(
             "os.environ",
-            {"SPECTRA_BASE_URL": "https://my.secure.software/org"},
+            {"SPECTRA_ASSURE_BASE_URL": "https://my.secure.software/org"},
             clear=True,
         ):
             with pytest.raises(ConfigError, match="SPECTRA_API_TOKEN is required"):
@@ -56,7 +56,7 @@ class TestRequiredEnvVars:
     def test_empty_api_token_raises(self):
         with patch.dict(
             "os.environ",
-            {"SPECTRA_BASE_URL": "https://my.secure.software/org", "SPECTRA_API_TOKEN": ""},
+            {"SPECTRA_ASSURE_BASE_URL": "https://my.secure.software/org", "SPECTRA_API_TOKEN": ""},
             clear=True,
         ):
             with pytest.raises(ConfigError, match="SPECTRA_API_TOKEN is required"):
@@ -202,13 +202,36 @@ class TestParseBaseUrl:
         assert org == "acme-corp"
         assert base_url == "https://my.secure.software/api/public/v1"
 
-    def test_missing_org_path_raises(self):
-        with pytest.raises(ConfigError, match="must include the organization path"):
-            _parse_base_url("https://my.secure.software/")
+    def test_subdomain_fallback_example(self):
+        base_url, org = _parse_base_url("https://example.secure.software")
+        assert base_url == "https://example.secure.software/api/public/v1"
+        assert org == "Example"
 
-    def test_missing_org_path_no_slash_raises(self):
-        with pytest.raises(ConfigError, match="must include the organization path"):
-            _parse_base_url("https://my.secure.software")
+    def test_subdomain_fallback_trial(self):
+        base_url, org = _parse_base_url("https://trial.secure.software")
+        assert base_url == "https://trial.secure.software/api/public/v1"
+        assert org == "Trial"
+
+    def test_subdomain_fallback_with_trailing_slash(self):
+        base_url, org = _parse_base_url("https://example.secure.software/")
+        assert base_url == "https://example.secure.software/api/public/v1"
+        assert org == "Example"
+
+    def test_org_override_wins_over_path(self):
+        base_url, org = _parse_base_url(
+            "https://my.secure.software/acme-corp", org_override="custom-org"
+        )
+        assert org == "custom-org"
+        assert base_url == "https://my.secure.software/api/public/v1"
+
+    def test_org_override_wins_over_subdomain(self):
+        base_url, org = _parse_base_url("https://example.secure.software", org_override="my-org")
+        assert org == "my-org"
+        assert base_url == "https://example.secure.software/api/public/v1"
+
+    def test_localhost_no_subdomain_no_path_raises(self):
+        with pytest.raises(ConfigError, match="Cannot determine organization"):
+            _parse_base_url("http://localhost:8080")
 
 
 # ---------------------------------------------------------------------------
@@ -310,16 +333,19 @@ class TestWhitespaceEnvVars:
     def test_whitespace_only_base_url_raises(self):
         with patch.dict(
             "os.environ",
-            {"SPECTRA_BASE_URL": "   ", "SPECTRA_API_TOKEN": "tok_1234567890abcdef"},
+            {"SPECTRA_ASSURE_BASE_URL": "   ", "SPECTRA_API_TOKEN": "tok_1234567890abcdef"},
             clear=True,
         ):
-            with pytest.raises(ConfigError, match="SPECTRA_BASE_URL is required"):
+            with pytest.raises(ConfigError, match="SPECTRA_ASSURE_BASE_URL is required"):
                 Config.from_env()
 
     def test_whitespace_only_api_token_raises(self):
         with patch.dict(
             "os.environ",
-            {"SPECTRA_BASE_URL": "https://my.secure.software/org", "SPECTRA_API_TOKEN": "   "},
+            {
+                "SPECTRA_ASSURE_BASE_URL": "https://my.secure.software/org",
+                "SPECTRA_API_TOKEN": "   ",
+            },
             clear=True,
         ):
             with pytest.raises(ConfigError, match="SPECTRA_API_TOKEN is required"):
@@ -366,7 +392,10 @@ class TestTokenMasking:
     def test_short_token_fully_masked(self):
         with patch.dict(
             "os.environ",
-            {"SPECTRA_BASE_URL": "https://my.secure.software/org", "SPECTRA_API_TOKEN": "abcd"},
+            {
+                "SPECTRA_ASSURE_BASE_URL": "https://my.secure.software/org",
+                "SPECTRA_API_TOKEN": "abcd",
+            },
             clear=True,
         ):
             cfg = Config.from_env()
@@ -385,3 +414,52 @@ class TestTokenMasking:
             assert "****" in output
         finally:
             logger.removeHandler(handler)
+
+
+# ---------------------------------------------------------------------------
+# SPECTRA_ASSURE_ORG override
+# ---------------------------------------------------------------------------
+
+
+class TestSpectraAssureOrg:
+    def test_org_env_var_overrides_url_path(self):
+        env = {
+            "SPECTRA_ASSURE_BASE_URL": "https://my.secure.software/acme-corp",
+            "SPECTRA_API_TOKEN": "tok_1234567890abcdef",
+            "SPECTRA_ASSURE_ORG": "custom-org",
+        }
+        with patch.dict("os.environ", env, clear=True):
+            cfg = Config.from_env()
+        assert cfg.org == "custom-org"
+        assert cfg.base_url == "https://my.secure.software/api/public/v1"
+
+    def test_org_env_var_with_pathless_url(self):
+        env = {
+            "SPECTRA_ASSURE_BASE_URL": "https://example.secure.software",
+            "SPECTRA_API_TOKEN": "tok_1234567890abcdef",
+            "SPECTRA_ASSURE_ORG": "custom-org",
+        }
+        with patch.dict("os.environ", env, clear=True):
+            cfg = Config.from_env()
+        assert cfg.org == "custom-org"
+
+    def test_org_env_var_whitespace_stripped(self):
+        env = {
+            "SPECTRA_ASSURE_BASE_URL": "https://my.secure.software/acme-corp",
+            "SPECTRA_API_TOKEN": "tok_1234567890abcdef",
+            "SPECTRA_ASSURE_ORG": "  my-org  ",
+        }
+        with patch.dict("os.environ", env, clear=True):
+            cfg = Config.from_env()
+        assert cfg.org == "my-org"
+
+    def test_org_env_var_empty_string_ignored(self):
+        """Empty SPECTRA_ASSURE_ORG should fall through to URL path parsing."""
+        env = {
+            "SPECTRA_ASSURE_BASE_URL": "https://my.secure.software/acme-corp",
+            "SPECTRA_API_TOKEN": "tok_1234567890abcdef",
+            "SPECTRA_ASSURE_ORG": "",
+        }
+        with patch.dict("os.environ", env, clear=True):
+            cfg = Config.from_env()
+        assert cfg.org == "acme-corp"

@@ -54,7 +54,8 @@ Dockerfile           # Multi-stage Chainguard build
 
 | Variable | Required | Default | Notes |
 |----------|----------|---------|-------|
-| `SPECTRA_BASE_URL` | Yes | — | e.g. `https://my.secure.software/acme-corp` — the org is parsed from the path |
+| `SPECTRA_ASSURE_BASE_URL` | Yes | — | e.g. `https://my.secure.software/acme-corp` — org resolution: `SPECTRA_ASSURE_ORG` override > URL path segment > subdomain (capitalized) |
+| `SPECTRA_ASSURE_ORG` | No | — | Explicit org override. Required for hosts like `localhost` with no path or subdomain |
 | `SPECTRA_API_TOKEN` | Yes | — | Bearer token (PAT) |
 | `STALE_THRESHOLD_DAYS` | No | `180` | Minimum 1 |
 | `CLEANUP_INTERVAL_HOURS` | No | `24` | `0` = single run and exit |
