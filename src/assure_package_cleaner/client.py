@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import quote
@@ -11,6 +12,22 @@ from urllib.parse import quote
 import requests
 
 logger = logging.getLogger(__name__)
+
+_MAX_RETRIES = 3
+_DEFAULT_RETRY_AFTER = 60  # seconds; aligns with burst-limit window
+
+
+def _parse_retry_after(resp: requests.Response) -> int:
+    """Extract Retry-After seconds from response, with fallback."""
+    raw = resp.headers.get("Retry-After")
+    if raw is not None:
+        try:
+            value = int(raw)
+            if value > 0:
+                return value
+        except ValueError:
+            pass
+    return _DEFAULT_RETRY_AFTER
 
 
 class APIError(Exception):
@@ -60,29 +77,51 @@ class SpectraClient:
             f"{self.base_url}/delete/{self._q(self.org)}/{self._q(group)}"
             f"/pkg:rl/{self._q(project)}/{self._q(package)}"
         )
-        logger.debug("DELETE %s", url)
-        self._delay()
-        try:
-            resp = requests.delete(url, headers=self._headers(), timeout=30)
-        except requests.RequestException as exc:
-            raise APIError("DELETE", url, 0, str(exc)) from exc
+        resp = self._with_retry(
+            "DELETE", url, lambda: requests.delete(url, headers=self._headers(), timeout=30)
+        )
         if resp.status_code not in (200, 204):
             raise APIError("DELETE", url, resp.status_code, resp.text[:200])
 
     def _get(self, path: str) -> dict[str, Any]:
         url = f"{self.base_url}{path}"
-        logger.debug("GET %s", url)
-        self._delay()
-        try:
-            resp = requests.get(url, headers=self._headers(), timeout=30)
-        except requests.RequestException as exc:
-            raise APIError("GET", url, 0, str(exc)) from exc
+        resp = self._with_retry(
+            "GET", url, lambda: requests.get(url, headers=self._headers(), timeout=30)
+        )
         if resp.status_code != 200:
             raise APIError("GET", url, resp.status_code, resp.text[:200])
         try:
             return resp.json()
         except ValueError as exc:
             raise APIError("GET", url, resp.status_code, "Response is not valid JSON") from exc
+
+    def _with_retry(
+        self,
+        method: str,
+        url: str,
+        call: Callable[[], requests.Response],
+    ) -> requests.Response:
+        """Execute an HTTP request with rate-limit (429) retry handling."""
+        for attempt in range(_MAX_RETRIES + 1):
+            logger.debug("%s %s", method, url)
+            self._delay()
+            try:
+                resp = call()
+            except requests.RequestException as exc:
+                raise APIError(method, url, 0, str(exc)) from exc
+            if resp.status_code != 429 or attempt == _MAX_RETRIES:
+                return resp
+            wait = _parse_retry_after(resp)
+            logger.warning(
+                "Rate limited (429) on %s %s — retry %d/%d after %ds",
+                method,
+                url,
+                attempt + 1,
+                _MAX_RETRIES,
+                wait,
+            )
+            time.sleep(wait)
+        return resp  # unreachable, but satisfies type checker
 
     def _headers(self) -> dict[str, str]:
         return {"Authorization": f"Bearer {self.api_token}"}

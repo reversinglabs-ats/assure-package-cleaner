@@ -7,7 +7,12 @@ from unittest.mock import MagicMock, patch
 import pytest
 import requests
 
-from assure_package_cleaner.client import APIError, SpectraClient
+from assure_package_cleaner.client import (
+    _DEFAULT_RETRY_AFTER,
+    APIError,
+    SpectraClient,
+    _parse_retry_after,
+)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -402,3 +407,169 @@ class TestURLEncoding:
         # The @ between package and version is structural, but @ within the version value is encoded
         assert "pkg@" in url
         assert "1.0%40beta" in url
+
+
+# ---------------------------------------------------------------------------
+# _parse_retry_after
+# ---------------------------------------------------------------------------
+
+
+def _rate_limit_response(retry_after: str | None = None) -> MagicMock:
+    resp = MagicMock()
+    resp.status_code = 429
+    resp.text = "Too Many Requests"
+    resp.headers = {"Retry-After": retry_after} if retry_after is not None else {}
+    return resp
+
+
+class TestParseRetryAfter:
+    def test_valid_header(self):
+        resp = _rate_limit_response("30")
+        assert _parse_retry_after(resp) == 30
+
+    def test_missing_header(self):
+        resp = _rate_limit_response()
+        assert _parse_retry_after(resp) == _DEFAULT_RETRY_AFTER
+
+    def test_non_integer_header(self):
+        resp = _rate_limit_response("not-a-number")
+        assert _parse_retry_after(resp) == _DEFAULT_RETRY_AFTER
+
+    def test_zero_header(self):
+        resp = _rate_limit_response("0")
+        assert _parse_retry_after(resp) == _DEFAULT_RETRY_AFTER
+
+    def test_negative_header(self):
+        resp = _rate_limit_response("-5")
+        assert _parse_retry_after(resp) == _DEFAULT_RETRY_AFTER
+
+    def test_large_value(self):
+        resp = _rate_limit_response("300")
+        assert _parse_retry_after(resp) == 300
+
+
+# ---------------------------------------------------------------------------
+# Rate-limit (429) retry handling
+# ---------------------------------------------------------------------------
+
+
+class TestRateLimitRetry:
+    @patch("assure_package_cleaner.client.time.sleep")
+    @patch("assure_package_cleaner.client.requests.get")
+    def test_429_then_success_retries(self, mock_get: MagicMock, mock_sleep: MagicMock):
+        mock_get.side_effect = [
+            _rate_limit_response("5"),
+            _ok_response({"groups": [{"name": "g1"}]}),
+        ]
+        client = _make_client()
+
+        result = client.list_groups()
+
+        assert result == [{"name": "g1"}]
+        assert mock_get.call_count == 2
+
+    @patch("assure_package_cleaner.client.time.sleep")
+    @patch("assure_package_cleaner.client.requests.get")
+    def test_respects_retry_after_header(self, mock_get: MagicMock, mock_sleep: MagicMock):
+        mock_get.side_effect = [
+            _rate_limit_response("42"),
+            _ok_response({"groups": []}),
+        ]
+        client = _make_client()
+
+        client.list_groups()
+
+        # First call: _delay sleep (0 for test client), second: retry-after sleep
+        mock_sleep.assert_called_with(42)
+
+    @patch("assure_package_cleaner.client.time.sleep")
+    @patch("assure_package_cleaner.client.requests.get")
+    def test_fallback_when_header_missing(self, mock_get: MagicMock, mock_sleep: MagicMock):
+        mock_get.side_effect = [
+            _rate_limit_response(),
+            _ok_response({"groups": []}),
+        ]
+        client = _make_client()
+
+        client.list_groups()
+
+        mock_sleep.assert_called_with(_DEFAULT_RETRY_AFTER)
+
+    @patch("assure_package_cleaner.client.time.sleep")
+    @patch("assure_package_cleaner.client.requests.get")
+    def test_exhausts_retries_raises_api_error(self, mock_get: MagicMock, mock_sleep: MagicMock):
+        mock_get.return_value = _rate_limit_response("1")
+        client = _make_client()
+
+        with pytest.raises(APIError) as exc_info:
+            client.list_groups()
+        assert exc_info.value.status_code == 429
+        # Initial attempt + MAX_RETRIES = 4 total calls
+        assert mock_get.call_count == 4
+
+    @patch("assure_package_cleaner.client.time.sleep")
+    @patch("assure_package_cleaner.client.requests.delete")
+    def test_delete_retries_on_429(self, mock_delete: MagicMock, mock_sleep: MagicMock):
+        mock_delete.side_effect = [
+            _rate_limit_response("2"),
+            _ok_response(status_code=204),
+        ]
+        client = _make_client()
+
+        client.delete_package("g", "p", "pkg")
+
+        assert mock_delete.call_count == 2
+
+    @patch("assure_package_cleaner.client.time.sleep")
+    @patch("assure_package_cleaner.client.requests.get")
+    def test_multiple_retries_then_success(self, mock_get: MagicMock, mock_sleep: MagicMock):
+        mock_get.side_effect = [
+            _rate_limit_response("1"),
+            _rate_limit_response("1"),
+            _ok_response({"groups": []}),
+        ]
+        client = _make_client()
+
+        result = client.list_groups()
+
+        assert result == []
+        assert mock_get.call_count == 3
+
+    @patch("assure_package_cleaner.client.time.sleep")
+    @patch("assure_package_cleaner.client.requests.get")
+    def test_logs_warning_on_retry(self, mock_get: MagicMock, mock_sleep: MagicMock):
+        mock_get.side_effect = [
+            _rate_limit_response("10"),
+            _ok_response({"groups": []}),
+        ]
+        client = _make_client()
+
+        with patch("assure_package_cleaner.client.logger") as mock_logger:
+            client.list_groups()
+            mock_logger.warning.assert_called_once()
+            warn_msg = mock_logger.warning.call_args[0][0]
+            assert "429" in warn_msg
+
+    @patch("assure_package_cleaner.client.time.sleep")
+    @patch("assure_package_cleaner.client.requests.get")
+    def test_non_429_error_not_retried(self, mock_get: MagicMock, mock_sleep: MagicMock):
+        mock_get.return_value = _error_response(500, "Server Error")
+        client = _make_client()
+
+        with pytest.raises(APIError) as exc_info:
+            client.list_groups()
+        assert exc_info.value.status_code == 500
+        assert mock_get.call_count == 1
+
+    @patch("assure_package_cleaner.client.time.sleep")
+    @patch("assure_package_cleaner.client.requests.delete")
+    def test_delete_exhausts_retries_raises_api_error(
+        self, mock_delete: MagicMock, mock_sleep: MagicMock
+    ):
+        mock_delete.return_value = _rate_limit_response("1")
+        client = _make_client()
+
+        with pytest.raises(APIError) as exc_info:
+            client.delete_package("g", "p", "pkg")
+        assert exc_info.value.status_code == 429
+        assert mock_delete.call_count == 4
