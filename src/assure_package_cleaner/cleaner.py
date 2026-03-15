@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+import threading
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 
 from assure_package_cleaner.client import APIError, SpectraClient
@@ -19,6 +20,7 @@ class CycleStats:
     groups_processed: int = 0
     projects_processed: int = 0
     packages_evaluated: int = 0
+    interrupted: bool = False
 
 
 @dataclass
@@ -26,6 +28,10 @@ class Cleaner:
     client: SpectraClient
     stale_threshold_days: int
     dry_run: bool = True
+    shutdown: threading.Event = field(default_factory=threading.Event)
+
+    def _check_shutdown(self) -> bool:
+        return self.shutdown.is_set()
 
     def run_cycle(self) -> CycleStats:
         cutoff = datetime.now(UTC) - timedelta(days=self.stale_threshold_days)
@@ -45,6 +51,9 @@ class Cleaner:
             return stats
 
         for group in groups:
+            if self._check_shutdown():
+                stats.interrupted = True
+                break
             try:
                 group_name = group["name"]
             except KeyError:
@@ -54,8 +63,10 @@ class Cleaner:
             stats.groups_processed += 1
             self._process_group(group_name, cutoff, stats)
 
+        status = "Cycle interrupted" if stats.interrupted else "Cycle complete"
         logger.info(
-            "Cycle complete — deleted=%d skipped=%d errors=%d (groups=%d projects=%d packages=%d)",
+            "%s — deleted=%d skipped=%d errors=%d (groups=%d projects=%d packages=%d)",
+            status,
             stats.deleted,
             stats.skipped,
             stats.errors,
@@ -74,6 +85,9 @@ class Cleaner:
             return
 
         for project in projects:
+            if self._check_shutdown():
+                stats.interrupted = True
+                return
             try:
                 project_name = project["name"]
             except KeyError:
@@ -94,6 +108,9 @@ class Cleaner:
             return
 
         for package in packages:
+            if self._check_shutdown():
+                stats.interrupted = True
+                return
             try:
                 package_name = package["name"]
             except KeyError:
@@ -129,6 +146,9 @@ class Cleaner:
 
         all_stale = True
         for version_info in versions:
+            if self._check_shutdown():
+                stats.interrupted = True
+                return
             try:
                 version = version_info["version"]
             except KeyError:
@@ -182,6 +202,9 @@ class Cleaner:
                 break
 
         if all_stale:
+            if self._check_shutdown():
+                stats.interrupted = True
+                return
             self._delete_package(group, project, package, len(versions), stats)
         else:
             stats.skipped += 1

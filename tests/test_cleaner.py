@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock, patch
 
@@ -22,10 +23,14 @@ def _make_cleaner(
     client: MagicMock | None = None,
     stale_threshold_days: int = 30,
     dry_run: bool = True,
+    shutdown: threading.Event | None = None,
 ) -> Cleaner:
     if client is None:
         client = MagicMock()
-    return Cleaner(client=client, stale_threshold_days=stale_threshold_days, dry_run=dry_run)
+    kwargs: dict = dict(client=client, stale_threshold_days=stale_threshold_days, dry_run=dry_run)
+    if shutdown is not None:
+        kwargs["shutdown"] = shutdown
+    return Cleaner(**kwargs)
 
 
 def _status_response(timestamp: str) -> dict:
@@ -739,3 +744,153 @@ class TestDeletionCorrectness:
         assert len(delete_calls) == 2
         assert delete_calls[0].args == ("grp", "proj", "stale-pkg")
         assert delete_calls[1].args == ("grp", "proj", "also-stale")
+
+
+# ---------------------------------------------------------------------------
+# Shutdown handling
+# ---------------------------------------------------------------------------
+
+
+class TestShutdownHandling:
+    def test_shutdown_before_any_group(self):
+        """Shutdown set before cycle starts processing groups."""
+        shutdown = threading.Event()
+        shutdown.set()
+
+        client = MagicMock()
+        client.list_groups.return_value = [{"name": "grp"}]
+
+        cleaner = _make_cleaner(client=client, shutdown=shutdown)
+        stats = cleaner.run_cycle()
+
+        assert stats.interrupted is True
+        assert stats.groups_processed == 0
+        assert stats.deleted == 0
+        client.list_projects.assert_not_called()
+
+    def test_shutdown_after_first_group_skips_second(self):
+        """Shutdown set during first group prevents second group from processing."""
+        shutdown = threading.Event()
+
+        client = MagicMock()
+        client.list_groups.return_value = [{"name": "grp1"}, {"name": "grp2"}]
+        client.list_projects.return_value = []
+
+        def set_shutdown_on_first_group(group):
+            shutdown.set()
+            return []
+
+        client.list_projects.side_effect = set_shutdown_on_first_group
+
+        cleaner = _make_cleaner(client=client, shutdown=shutdown)
+        stats = cleaner.run_cycle()
+
+        assert stats.interrupted is True
+        assert stats.groups_processed == 1
+        client.list_projects.assert_called_once_with("grp1")
+
+    def test_shutdown_prevents_deletion_even_when_all_stale(self):
+        """Most critical: shutdown must block deletion even if all versions are stale."""
+        shutdown = threading.Event()
+
+        client = MagicMock()
+        client.list_groups.return_value = [{"name": "grp"}]
+        client.list_projects.return_value = [{"name": "proj"}]
+        client.list_packages.return_value = [{"name": "pkg"}]
+        client.list_versions.return_value = [{"version": "1.0"}]
+        client.get_version_status.return_value = _status_response(_OLD_TIMESTAMP)
+
+        def set_shutdown_after_status(*args, **kwargs):
+            result = _status_response(_OLD_TIMESTAMP)
+            shutdown.set()
+            return result
+
+        client.get_version_status.side_effect = set_shutdown_after_status
+
+        cleaner = _make_cleaner(client=client, dry_run=False, shutdown=shutdown)
+        stats = cleaner.run_cycle()
+
+        assert stats.interrupted is True
+        assert stats.deleted == 0
+        client.delete_package.assert_not_called()
+
+    def test_shutdown_mid_version_evaluation_abandons_package(self):
+        """Shutdown during version loop stops evaluating further versions."""
+        shutdown = threading.Event()
+
+        client = MagicMock()
+        client.list_groups.return_value = [{"name": "grp"}]
+        client.list_projects.return_value = [{"name": "proj"}]
+        client.list_packages.return_value = [{"name": "pkg"}]
+        client.list_versions.return_value = [
+            {"version": "1.0"},
+            {"version": "2.0"},
+            {"version": "3.0"},
+        ]
+
+        def set_shutdown_on_first_version(*args, **kwargs):
+            shutdown.set()
+            return _status_response(_OLD_TIMESTAMP)
+
+        client.get_version_status.side_effect = set_shutdown_on_first_version
+
+        cleaner = _make_cleaner(client=client, dry_run=False, shutdown=shutdown)
+        stats = cleaner.run_cycle()
+
+        assert stats.interrupted is True
+        assert stats.deleted == 0
+        # Only checked one version before shutdown was detected
+        assert client.get_version_status.call_count == 1
+        client.delete_package.assert_not_called()
+
+    def test_default_shutdown_event_never_interrupts(self):
+        """Backward compat: default Event is never set, so cycle completes normally."""
+        client = MagicMock()
+        client.list_groups.return_value = [{"name": "grp"}]
+        client.list_projects.return_value = [{"name": "proj"}]
+        client.list_packages.return_value = [{"name": "pkg"}]
+        client.list_versions.return_value = [{"version": "1.0"}]
+        client.get_version_status.return_value = _status_response(_OLD_TIMESTAMP)
+
+        cleaner = _make_cleaner(client=client, dry_run=True)
+        stats = cleaner.run_cycle()
+
+        assert stats.interrupted is False
+        assert stats.deleted == 1
+
+    def test_cycle_stats_interrupted_defaults_false(self):
+        assert CycleStats().interrupted is False
+
+    def test_partial_stats_reflect_work_before_interruption(self):
+        """Stats should reflect only the work done before shutdown."""
+        shutdown = threading.Event()
+
+        client = MagicMock()
+        client.list_groups.return_value = [{"name": "grp"}]
+        client.list_projects.return_value = [{"name": "proj"}]
+        client.list_packages.return_value = [
+            {"name": "pkg-1"},
+            {"name": "pkg-2"},
+            {"name": "pkg-3"},
+        ]
+
+        call_count = 0
+
+        def list_versions_with_shutdown(group, project, package):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 2:
+                shutdown.set()
+            return [{"version": "1.0"}]
+
+        client.list_versions.side_effect = list_versions_with_shutdown
+        client.get_version_status.return_value = _status_response(_OLD_TIMESTAMP)
+
+        cleaner = _make_cleaner(client=client, dry_run=True, shutdown=shutdown)
+        stats = cleaner.run_cycle()
+
+        assert stats.interrupted is True
+        # First package fully processed (evaluated + deleted in dry-run)
+        # Second package entered _evaluate_package, but shutdown detected at version loop
+        assert stats.packages_evaluated == 2
+        assert stats.deleted == 1

@@ -17,7 +17,7 @@ _shutdown = threading.Event()
 
 
 def _handle_signal(signum, frame):
-    logger.info("Received shutdown signal, will exit after current operation")
+    logger.info("Received shutdown signal, stopping...")
     _shutdown.set()
 
 
@@ -49,6 +49,7 @@ def main() -> None:
         client=client,
         stale_threshold_days=cfg.stale_threshold_days,
         dry_run=cfg.dry_run,
+        shutdown=_shutdown,
     )
 
     if cfg.cleanup_interval_hours == 0:
