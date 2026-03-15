@@ -299,3 +299,89 @@ class TestConfigFrozen:
             cfg = Config.from_env()
         with pytest.raises(AttributeError):
             cfg.dry_run = False  # type: ignore[misc]
+
+
+# ---------------------------------------------------------------------------
+# Whitespace-only env vars rejected
+# ---------------------------------------------------------------------------
+
+
+class TestWhitespaceEnvVars:
+    def test_whitespace_only_base_url_raises(self):
+        with patch.dict(
+            "os.environ",
+            {"SPECTRA_BASE_URL": "   ", "SPECTRA_API_TOKEN": "tok_1234567890abcdef"},
+            clear=True,
+        ):
+            with pytest.raises(ConfigError, match="SPECTRA_BASE_URL is required"):
+                Config.from_env()
+
+    def test_whitespace_only_api_token_raises(self):
+        with patch.dict(
+            "os.environ",
+            {"SPECTRA_BASE_URL": "https://my.secure.software/org", "SPECTRA_API_TOKEN": "   "},
+            clear=True,
+        ):
+            with pytest.raises(ConfigError, match="SPECTRA_API_TOKEN is required"):
+                Config.from_env()
+
+    def test_whitespace_padded_dry_run_false(self):
+        """DRY_RUN=' false ' should be treated as false after stripping."""
+        with patch.dict("os.environ", _env(DRY_RUN=" false "), clear=True):
+            cfg = Config.from_env()
+        assert cfg.dry_run is False
+
+    def test_whitespace_padded_dry_run_no(self):
+        with patch.dict("os.environ", _env(DRY_RUN=" no "), clear=True):
+            cfg = Config.from_env()
+        assert cfg.dry_run is False
+
+
+# ---------------------------------------------------------------------------
+# Token masking safety
+# ---------------------------------------------------------------------------
+
+
+class TestTokenMasking:
+    def test_long_token_is_partially_masked(self):
+        with patch.dict("os.environ", _env(), clear=True):
+            cfg = Config.from_env()
+        # Token is "tok_1234567890abcdef" (20 chars) -> should show first 4 + **** + last 4
+        import io
+        import logging
+
+        handler = logging.StreamHandler(io.StringIO())
+        logger = logging.getLogger("assure_package_cleaner.config")
+        logger.addHandler(handler)
+        logger.setLevel(logging.INFO)
+        try:
+            cfg.log_settings()
+            output = handler.stream.getvalue()
+            assert "tok_" in output
+            assert "cdef" in output
+            assert "tok_1234567890abcdef" not in output
+        finally:
+            logger.removeHandler(handler)
+
+    def test_short_token_fully_masked(self):
+        with patch.dict(
+            "os.environ",
+            {"SPECTRA_BASE_URL": "https://my.secure.software/org", "SPECTRA_API_TOKEN": "abcd"},
+            clear=True,
+        ):
+            cfg = Config.from_env()
+
+        import io
+        import logging
+
+        handler = logging.StreamHandler(io.StringIO())
+        logger = logging.getLogger("assure_package_cleaner.config")
+        logger.addHandler(handler)
+        logger.setLevel(logging.INFO)
+        try:
+            cfg.log_settings()
+            output = handler.stream.getvalue()
+            assert "abcd" not in output
+            assert "****" in output
+        finally:
+            logger.removeHandler(handler)

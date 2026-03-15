@@ -6,6 +6,7 @@ import logging
 import time
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import quote
 
 import requests
 
@@ -28,28 +29,37 @@ class SpectraClient:
     request_delay: float = 0.5
 
     def list_groups(self) -> list[dict[str, Any]]:
-        data = self._get(f"/list/{self.org}")
+        data = self._get(f"/list/{self._q(self.org)}")
         return data.get("groups", [])
 
     def list_projects(self, group: str) -> list[dict[str, Any]]:
-        data = self._get(f"/list/{self.org}/{group}")
+        data = self._get(f"/list/{self._q(self.org)}/{self._q(group)}")
         return data.get("projects", [])
 
     def list_packages(self, group: str, project: str) -> list[dict[str, Any]]:
-        data = self._get(f"/list/{self.org}/{group}/pkg:rl/{project}")
+        data = self._get(f"/list/{self._q(self.org)}/{self._q(group)}/pkg:rl/{self._q(project)}")
         return data.get("packages", [])
 
     def list_versions(self, group: str, project: str, package: str) -> list[dict[str, Any]]:
-        data = self._get(f"/list/{self.org}/{group}/pkg:rl/{project}/{package}")
+        data = self._get(
+            f"/list/{self._q(self.org)}/{self._q(group)}"
+            f"/pkg:rl/{self._q(project)}/{self._q(package)}"
+        )
         return data.get("versions", [])
 
     def get_version_status(
         self, group: str, project: str, package: str, version: str
     ) -> dict[str, Any]:
-        return self._get(f"/status/{self.org}/{group}/pkg:rl/{project}/{package}@{version}")
+        return self._get(
+            f"/status/{self._q(self.org)}/{self._q(group)}"
+            f"/pkg:rl/{self._q(project)}/{self._q(package)}@{self._q(version)}"
+        )
 
     def delete_package(self, group: str, project: str, package: str) -> None:
-        url = f"{self.base_url}/delete/{self.org}/{group}/pkg:rl/{project}/{package}"
+        url = (
+            f"{self.base_url}/delete/{self._q(self.org)}/{self._q(group)}"
+            f"/pkg:rl/{self._q(project)}/{self._q(package)}"
+        )
         logger.debug("DELETE %s", url)
         self._delay()
         try:
@@ -69,10 +79,17 @@ class SpectraClient:
             raise APIError("GET", url, 0, str(exc)) from exc
         if resp.status_code != 200:
             raise APIError("GET", url, resp.status_code, resp.text[:200])
-        return resp.json()
+        try:
+            return resp.json()
+        except ValueError as exc:
+            raise APIError("GET", url, resp.status_code, "Response is not valid JSON") from exc
 
     def _headers(self) -> dict[str, str]:
         return {"Authorization": f"Bearer {self.api_token}"}
+
+    @staticmethod
+    def _q(value: str) -> str:
+        return quote(value, safe="")
 
     def _delay(self) -> None:
         if self.request_delay > 0:

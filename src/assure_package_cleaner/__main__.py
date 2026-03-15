@@ -53,7 +53,10 @@ def main() -> None:
 
     if cfg.cleanup_interval_hours == 0:
         logger.info("Single-run mode (CLEANUP_INTERVAL_HOURS=0)")
-        cleaner.run_cycle()
+        try:
+            cleaner.run_cycle()
+        except Exception:
+            logger.exception("Unexpected error during cleanup cycle")
         return
 
     interval_seconds = cfg.cleanup_interval_hours * 3600

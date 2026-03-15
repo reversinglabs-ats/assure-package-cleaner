@@ -45,7 +45,12 @@ class Cleaner:
             return stats
 
         for group in groups:
-            group_name = group["name"]
+            try:
+                group_name = group["name"]
+            except KeyError:
+                logger.warning("Group entry missing 'name' key: %r — skipping", group)
+                stats.errors += 1
+                continue
             stats.groups_processed += 1
             self._process_group(group_name, cutoff, stats)
 
@@ -69,7 +74,12 @@ class Cleaner:
             return
 
         for project in projects:
-            project_name = project["name"]
+            try:
+                project_name = project["name"]
+            except KeyError:
+                logger.warning("Project entry missing 'name' key in group %s — skipping", group)
+                stats.errors += 1
+                continue
             stats.projects_processed += 1
             self._process_project(group, project_name, cutoff, stats)
 
@@ -84,7 +94,14 @@ class Cleaner:
             return
 
         for package in packages:
-            package_name = package["name"]
+            try:
+                package_name = package["name"]
+            except KeyError:
+                logger.warning(
+                    "Package entry missing 'name' key in %s/%s — skipping", group, project
+                )
+                stats.errors += 1
+                continue
             stats.packages_evaluated += 1
             self._evaluate_package(group, project, package_name, cutoff, stats)
 
@@ -112,7 +129,15 @@ class Cleaner:
 
         all_stale = True
         for version_info in versions:
-            version = version_info["version"]
+            try:
+                version = version_info["version"]
+            except KeyError:
+                logger.warning(
+                    "Version entry missing 'version' key in %s — skipping package (fail-safe)",
+                    pkg_path,
+                )
+                stats.errors += 1
+                return
             try:
                 status = self.client.get_version_status(group, project, package, version)
             except APIError:
@@ -134,7 +159,18 @@ class Cleaner:
                 stats.skipped += 1
                 return
 
-            analysis_time = _parse_timestamp(timestamp_str)
+            try:
+                analysis_time = _parse_timestamp(timestamp_str)
+            except ValueError:
+                logger.warning(
+                    "Unparseable timestamp %r for %s@%s — skipping package (fail-safe)",
+                    timestamp_str,
+                    pkg_path,
+                    version,
+                )
+                stats.errors += 1
+                return
+
             if analysis_time >= cutoff:
                 logger.debug(
                     "Version %s@%s analyzed at %s is newer than cutoff — skipping package",

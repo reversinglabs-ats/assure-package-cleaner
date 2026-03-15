@@ -328,3 +328,77 @@ class TestAPIError:
         assert "404" in str(err)
         assert "Not Found" in str(err)
         assert "https://example.com/api" in str(err)
+
+
+# ---------------------------------------------------------------------------
+# Non-JSON 200 response
+# ---------------------------------------------------------------------------
+
+
+class TestNonJsonResponse:
+    @patch("assure_package_cleaner.client.requests.get")
+    def test_non_json_200_raises_api_error(self, mock_get: MagicMock):
+        """A 200 response with non-JSON body should raise APIError, not JSONDecodeError."""
+        resp = MagicMock()
+        resp.status_code = 200
+        resp.json.side_effect = ValueError("No JSON object could be decoded")
+        resp.text = "<html>Gateway Timeout</html>"
+        mock_get.return_value = resp
+
+        client = _make_client()
+        with pytest.raises(APIError) as exc_info:
+            client.list_groups()
+        assert exc_info.value.status_code == 200
+        assert "not valid JSON" in str(exc_info.value)
+
+
+# ---------------------------------------------------------------------------
+# URL encoding of path parameters
+# ---------------------------------------------------------------------------
+
+
+class TestURLEncoding:
+    @patch("assure_package_cleaner.client.requests.get")
+    def test_group_name_with_space_is_encoded(self, mock_get: MagicMock):
+        mock_get.return_value = _ok_response({"projects": []})
+        client = _make_client()
+
+        client.list_projects("my group")
+
+        url = mock_get.call_args[0][0]
+        assert "my%20group" in url
+        assert "my group" not in url
+
+    @patch("assure_package_cleaner.client.requests.get")
+    def test_special_chars_in_package_name_encoded(self, mock_get: MagicMock):
+        mock_get.return_value = _ok_response({"versions": []})
+        client = _make_client()
+
+        client.list_versions("grp", "proj", "my pkg?v=1")
+
+        url = mock_get.call_args[0][0]
+        assert "my%20pkg%3Fv%3D1" in url
+
+    @patch("assure_package_cleaner.client.requests.delete")
+    def test_delete_url_encodes_path_params(self, mock_delete: MagicMock):
+        mock_delete.return_value = _ok_response(status_code=204)
+        client = _make_client()
+
+        client.delete_package("my group", "my project", "my pkg")
+
+        url = mock_delete.call_args[0][0]
+        assert "my%20group" in url
+        assert "my%20project" in url
+        assert "my%20pkg" in url
+
+    @patch("assure_package_cleaner.client.requests.get")
+    def test_version_with_at_sign_encoded(self, mock_get: MagicMock):
+        mock_get.return_value = _ok_response({"analysis": {}})
+        client = _make_client()
+
+        client.get_version_status("grp", "proj", "pkg", "1.0@beta")
+
+        url = mock_get.call_args[0][0]
+        # The @ between package and version is structural, but @ within the version value is encoded
+        assert "pkg@" in url
+        assert "1.0%40beta" in url

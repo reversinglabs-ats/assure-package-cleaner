@@ -27,11 +27,11 @@ class Config:
 
     @classmethod
     def from_env(cls) -> Config:
-        base_url_raw = os.environ.get("SPECTRA_BASE_URL", "")
+        base_url_raw = os.environ.get("SPECTRA_BASE_URL", "").strip()
         if not base_url_raw:
             raise ConfigError("SPECTRA_BASE_URL is required")
 
-        api_token = os.environ.get("SPECTRA_API_TOKEN", "")
+        api_token = os.environ.get("SPECTRA_API_TOKEN", "").strip()
         if not api_token:
             raise ConfigError("SPECTRA_API_TOKEN is required")
 
@@ -42,7 +42,7 @@ class Config:
         request_delay_seconds = _parse_float("REQUEST_DELAY_SECONDS", 0.5, minimum=0.0)
         log_level = os.environ.get("LOG_LEVEL", "INFO").upper()
 
-        dry_run_raw = os.environ.get("DRY_RUN", "true").lower()
+        dry_run_raw = os.environ.get("DRY_RUN", "true").strip().lower()
         dry_run = dry_run_raw not in ("false", "0", "no")
 
         return cls(
@@ -57,7 +57,10 @@ class Config:
         )
 
     def log_settings(self) -> None:
-        masked_token = self.api_token[:4] + "****" + self.api_token[-4:]
+        if len(self.api_token) > 8:
+            masked_token = self.api_token[:4] + "****" + self.api_token[-4:]
+        else:
+            masked_token = "****"
         logger.info("Configuration:")
         logger.info("  Base URL:              %s", self.base_url)
         logger.info("  Organization:          %s", self.org)
