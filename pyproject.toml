@@ -9,7 +9,7 @@ description = "Deletes stale packages from the Spectra Assure portal based on a 
 requires-python = ">=3.12"
 license = "MIT"
 dependencies = [
-  "requests>=2.31",
+  "requests>=2.33.1",
 ]
 
 [project.optional-dependencies]
