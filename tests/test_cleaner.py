@@ -24,10 +24,18 @@ def _make_cleaner(
     stale_threshold_days: int = 30,
     dry_run: bool = True,
     shutdown: threading.Event | None = None,
+    target_groups: frozenset[str] = frozenset(),
+    target_projects: frozenset[str] = frozenset(),
 ) -> Cleaner:
     if client is None:
         client = MagicMock()
-    kwargs: dict = dict(client=client, stale_threshold_days=stale_threshold_days, dry_run=dry_run)
+    kwargs: dict = {
+        "client": client,
+        "stale_threshold_days": stale_threshold_days,
+        "dry_run": dry_run,
+        "target_groups": target_groups,
+        "target_projects": target_projects,
+    }
     if shutdown is not None:
         kwargs["shutdown"] = shutdown
     return Cleaner(**kwargs)
@@ -894,3 +902,64 @@ class TestShutdownHandling:
         # Second package entered _evaluate_package, but shutdown detected at version loop
         assert stats.packages_evaluated == 2
         assert stats.deleted == 1
+
+
+# ---------------------------------------------------------------------------
+# Group scoping
+# ---------------------------------------------------------------------------
+
+
+class TestGroupScoping:
+    def test_only_matching_group_is_walked(self):
+        client = MagicMock()
+        client.list_groups.return_value = [{"name": "grp1"}, {"name": "grp2"}]
+        client.list_projects.return_value = []
+
+        cleaner = _make_cleaner(client=client, target_groups=frozenset({"grp1"}))
+        stats = cleaner.run_cycle()
+
+        assert stats.groups_processed == 1
+        client.list_projects.assert_called_once_with("grp1")
+
+    def test_multiple_groups_in_scope(self):
+        client = MagicMock()
+        client.list_groups.return_value = [
+            {"name": "grp1"},
+            {"name": "grp2"},
+            {"name": "grp3"},
+        ]
+        client.list_projects.return_value = []
+
+        cleaner = _make_cleaner(client=client, target_groups=frozenset({"grp1", "grp3"}))
+        stats = cleaner.run_cycle()
+
+        assert stats.groups_processed == 2
+        walked = {call.args[0] for call in client.list_projects.call_args_list}
+        assert walked == {"grp1", "grp3"}
+
+    def test_no_group_filter_walks_all(self):
+        client = MagicMock()
+        client.list_groups.return_value = [{"name": "grp1"}, {"name": "grp2"}]
+        client.list_projects.return_value = []
+
+        cleaner = _make_cleaner(client=client)
+        stats = cleaner.run_cycle()
+
+        assert stats.groups_processed == 2
+        assert client.list_projects.call_count == 2
+
+    def test_nonmatching_group_filter_deletes_nothing(self):
+        client = MagicMock()
+        client.list_groups.return_value = [{"name": "grp1"}]
+        client.list_projects.return_value = [{"name": "proj"}]
+        client.list_packages.return_value = [{"name": "pkg"}]
+        client.list_versions.return_value = [{"version": "1.0"}]
+        client.get_version_status.return_value = _status_response(_OLD_TIMESTAMP)
+
+        cleaner = _make_cleaner(client=client, dry_run=False, target_groups=frozenset({"other"}))
+        stats = cleaner.run_cycle()
+
+        assert stats.groups_processed == 0
+        assert stats.deleted == 0
+        client.list_projects.assert_not_called()
+        client.delete_package.assert_not_called()

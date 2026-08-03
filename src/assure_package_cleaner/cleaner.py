@@ -29,6 +29,8 @@ class Cleaner:
     stale_threshold_days: int
     dry_run: bool = True
     shutdown: threading.Event = field(default_factory=threading.Event)
+    target_groups: frozenset[str] = frozenset()
+    target_projects: frozenset[str] = frozenset()
 
     def _check_shutdown(self) -> bool:
         return self.shutdown.is_set()
@@ -59,6 +61,9 @@ class Cleaner:
             except KeyError:
                 logger.warning("Group entry missing 'name' key: %r — skipping", group)
                 stats.errors += 1
+                continue
+            if self.target_groups and group_name not in self.target_groups:
+                logger.debug("Group %s not in scope — skipping", group_name)
                 continue
             stats.groups_processed += 1
             self._process_group(group_name, cutoff, stats)
