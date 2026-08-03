@@ -502,6 +502,22 @@ class TestScopingConfig:
             cfg = Config.from_env()
         assert cfg.target_groups == frozenset()
 
+    def test_set_but_empty_warns(self, caplog):
+        with patch.dict("os.environ", _env(SPECTRA_ASSURE_GROUP=" , , "), clear=True):
+            with caplog.at_level("WARNING"):
+                cfg = Config.from_env()
+        assert cfg.target_groups == frozenset()
+        assert any(
+            "SPECTRA_ASSURE_GROUP is set but contains no usable names" in r.message
+            for r in caplog.records
+        )
+
+    def test_unset_does_not_warn(self, caplog):
+        with patch.dict("os.environ", _env(), clear=True):
+            with caplog.at_level("WARNING"):
+                Config.from_env()
+        assert not any("no usable names" in r.message for r in caplog.records)
+
     def test_project_comma_list(self):
         with patch.dict("os.environ", _env(SPECTRA_ASSURE_PROJECT="p1,p2"), clear=True):
             cfg = Config.from_env()

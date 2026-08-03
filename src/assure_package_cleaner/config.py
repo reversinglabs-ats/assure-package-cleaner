@@ -149,7 +149,14 @@ def _parse_float(name: str, default: float, *, minimum: float) -> float:
 def _parse_csv_set(name: str) -> frozenset[str]:
     """Parse a comma-separated env var into a set of stripped, non-empty values."""
     raw = os.environ.get(name, "")
-    return frozenset(item.strip() for item in raw.split(",") if item.strip())
+    result = frozenset(item.strip() for item in raw.split(",") if item.strip())
+    if raw and not result:
+        logger.warning(
+            "%s is set but contains no usable names — treating as no scope (all). "
+            "Check for stray whitespace or commas.",
+            name,
+        )
+    return result
 
 
 def _format_scope(values: frozenset[str]) -> str:

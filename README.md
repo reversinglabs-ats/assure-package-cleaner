@@ -71,6 +71,10 @@ Each variable is a comma-separated list; surrounding whitespace is ignored.
 Setting `SPECTRA_ASSURE_PROJECT` without `SPECTRA_ASSURE_GROUP` matches that
 project name across all groups. At the end of a cycle, any filter value that
 matched no group or project is logged as a warning, so typos surface quickly.
+If a scope variable is set but contains no usable name (only whitespace or
+commas), the tool warns at startup and treats it as unset — meaning **no
+scope, i.e. the whole org** — so a malformed value never silently narrows or
+widens the walk unnoticed.
 
 ## Usage
 
