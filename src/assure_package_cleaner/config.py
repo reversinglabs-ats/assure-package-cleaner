@@ -24,6 +24,8 @@ class Config:
     dry_run: bool
     request_delay_seconds: float
     log_level: str
+    target_groups: frozenset[str]
+    target_projects: frozenset[str]
 
     @classmethod
     def from_env(cls) -> Config:
@@ -48,6 +50,9 @@ class Config:
         dry_run_raw = os.environ.get("DRY_RUN", "true").strip().lower()
         dry_run = dry_run_raw not in ("false", "0", "no")
 
+        target_groups = _parse_csv_set("SPECTRA_ASSURE_GROUP")
+        target_projects = _parse_csv_set("SPECTRA_ASSURE_PROJECT")
+
         return cls(
             base_url=base_url,
             org=org,
@@ -57,6 +62,8 @@ class Config:
             dry_run=dry_run,
             request_delay_seconds=request_delay_seconds,
             log_level=log_level,
+            target_groups=target_groups,
+            target_projects=target_projects,
         )
 
     def log_settings(self) -> None:
@@ -73,6 +80,8 @@ class Config:
         logger.info("  Dry run:               %s", self.dry_run)
         logger.info("  Request delay:         %.1fs", self.request_delay_seconds)
         logger.info("  Log level:             %s", self.log_level)
+        logger.info("  Group scope:           %s", _format_scope(self.target_groups))
+        logger.info("  Project scope:         %s", _format_scope(self.target_projects))
 
 
 def _parse_base_url(raw: str, *, org_override: str | None = None) -> tuple[str, str]:
@@ -135,3 +144,13 @@ def _parse_float(name: str, default: float, *, minimum: float) -> float:
     if value < minimum:
         raise ConfigError(f"{name} must be >= {minimum}, got: {value}")
     return value
+
+
+def _parse_csv_set(name: str) -> frozenset[str]:
+    """Parse a comma-separated env var into a set of stripped, non-empty values."""
+    raw = os.environ.get(name, "")
+    return frozenset(item.strip() for item in raw.split(",") if item.strip())
+
+
+def _format_scope(values: frozenset[str]) -> str:
+    return ", ".join(sorted(values)) if values else "(all)"

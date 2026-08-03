@@ -463,3 +463,93 @@ class TestSpectraAssureOrg:
         with patch.dict("os.environ", env, clear=True):
             cfg = Config.from_env()
         assert cfg.org == "acme-corp"
+
+
+# ---------------------------------------------------------------------------
+# Group/project scoping
+# ---------------------------------------------------------------------------
+
+
+class TestScopingConfig:
+    def test_defaults_are_empty(self):
+        with patch.dict("os.environ", _env(), clear=True):
+            cfg = Config.from_env()
+        assert cfg.target_groups == frozenset()
+        assert cfg.target_projects == frozenset()
+
+    def test_group_single_value(self):
+        with patch.dict("os.environ", _env(SPECTRA_ASSURE_GROUP="grp"), clear=True):
+            cfg = Config.from_env()
+        assert cfg.target_groups == frozenset({"grp"})
+
+    def test_group_comma_list(self):
+        with patch.dict("os.environ", _env(SPECTRA_ASSURE_GROUP="a,b,c"), clear=True):
+            cfg = Config.from_env()
+        assert cfg.target_groups == frozenset({"a", "b", "c"})
+
+    def test_group_whitespace_stripped(self):
+        with patch.dict("os.environ", _env(SPECTRA_ASSURE_GROUP="a, b , c"), clear=True):
+            cfg = Config.from_env()
+        assert cfg.target_groups == frozenset({"a", "b", "c"})
+
+    def test_group_empty_elements_dropped(self):
+        with patch.dict("os.environ", _env(SPECTRA_ASSURE_GROUP="a,,b,"), clear=True):
+            cfg = Config.from_env()
+        assert cfg.target_groups == frozenset({"a", "b"})
+
+    def test_group_only_commas_is_empty(self):
+        with patch.dict("os.environ", _env(SPECTRA_ASSURE_GROUP=" , , "), clear=True):
+            cfg = Config.from_env()
+        assert cfg.target_groups == frozenset()
+
+    def test_project_comma_list(self):
+        with patch.dict("os.environ", _env(SPECTRA_ASSURE_PROJECT="p1,p2"), clear=True):
+            cfg = Config.from_env()
+        assert cfg.target_projects == frozenset({"p1", "p2"})
+
+    def test_project_unset_is_empty(self):
+        with patch.dict("os.environ", _env(), clear=True):
+            cfg = Config.from_env()
+        assert cfg.target_projects == frozenset()
+
+    def test_log_settings_shows_scope(self):
+        import io
+        import logging
+
+        with patch.dict(
+            "os.environ",
+            _env(SPECTRA_ASSURE_GROUP="grp-a", SPECTRA_ASSURE_PROJECT="proj-x"),
+            clear=True,
+        ):
+            cfg = Config.from_env()
+
+        handler = logging.StreamHandler(io.StringIO())
+        logger = logging.getLogger("assure_package_cleaner.config")
+        logger.addHandler(handler)
+        logger.setLevel(logging.INFO)
+        try:
+            cfg.log_settings()
+            output = handler.stream.getvalue()
+            assert "grp-a" in output
+            assert "proj-x" in output
+        finally:
+            logger.removeHandler(handler)
+
+    def test_log_settings_shows_all_when_unscoped(self):
+        import io
+        import logging
+
+        with patch.dict("os.environ", _env(), clear=True):
+            cfg = Config.from_env()
+
+        handler = logging.StreamHandler(io.StringIO())
+        logger = logging.getLogger("assure_package_cleaner.config")
+        logger.addHandler(handler)
+        logger.setLevel(logging.INFO)
+        try:
+            cfg.log_settings()
+            output = handler.stream.getvalue()
+            assert "Group scope:           (all)" in output
+            assert "Project scope:         (all)" in output
+        finally:
+            logger.removeHandler(handler)
