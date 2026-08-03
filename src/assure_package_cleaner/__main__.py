@@ -50,6 +50,8 @@ def main() -> None:
         stale_threshold_days=cfg.stale_threshold_days,
         dry_run=cfg.dry_run,
         shutdown=_shutdown,
+        target_groups=cfg.target_groups,
+        target_projects=cfg.target_projects,
     )
 
     if cfg.cleanup_interval_hours == 0:
