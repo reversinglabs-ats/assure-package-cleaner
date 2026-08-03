@@ -1015,3 +1015,66 @@ class TestProjectScoping:
         assert stats.groups_processed == 1
         assert stats.projects_processed == 1
         client.list_packages.assert_called_once_with("grp1", "proj-b")
+
+
+# ---------------------------------------------------------------------------
+# Unmatched scope warnings
+# ---------------------------------------------------------------------------
+
+
+class TestScopeWarnings:
+    def test_unmatched_group_warns(self, caplog):
+        client = MagicMock()
+        client.list_groups.return_value = [{"name": "grp1"}]
+        client.list_projects.return_value = []
+
+        cleaner = _make_cleaner(client=client, target_groups=frozenset({"nope"}))
+        with caplog.at_level("WARNING"):
+            cleaner.run_cycle()
+
+        assert any("nope" in r.message for r in caplog.records)
+
+    def test_unmatched_project_warns(self, caplog):
+        client = MagicMock()
+        client.list_groups.return_value = [{"name": "grp1"}]
+        client.list_projects.return_value = [{"name": "proj-a"}]
+        client.list_packages.return_value = []
+
+        cleaner = _make_cleaner(client=client, target_projects=frozenset({"nope"}))
+        with caplog.at_level("WARNING"):
+            cleaner.run_cycle()
+
+        assert any("nope" in r.message for r in caplog.records)
+
+    def test_matched_filters_emit_no_warning(self, caplog):
+        client = MagicMock()
+        client.list_groups.return_value = [{"name": "grp1"}]
+        client.list_projects.return_value = [{"name": "proj-a"}]
+        client.list_packages.return_value = []
+
+        cleaner = _make_cleaner(
+            client=client,
+            target_groups=frozenset({"grp1"}),
+            target_projects=frozenset({"proj-a"}),
+        )
+        with caplog.at_level("WARNING"):
+            cleaner.run_cycle()
+
+        assert [r for r in caplog.records if r.levelname == "WARNING"] == []
+
+    def test_project_only_in_out_of_scope_group_warns(self, caplog):
+        client = MagicMock()
+        client.list_groups.return_value = [{"name": "grp1"}, {"name": "grp2"}]
+        # proj-x only exists in grp2, which is excluded by the group filter.
+        client.list_projects.side_effect = [[{"name": "proj-a"}], [{"name": "proj-x"}]]
+        client.list_packages.return_value = []
+
+        cleaner = _make_cleaner(
+            client=client,
+            target_groups=frozenset({"grp1"}),
+            target_projects=frozenset({"proj-x"}),
+        )
+        with caplog.at_level("WARNING"):
+            cleaner.run_cycle()
+
+        assert any("proj-x" in r.message for r in caplog.records)

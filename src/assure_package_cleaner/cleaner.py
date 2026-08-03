@@ -52,6 +52,9 @@ class Cleaner:
             stats.errors += 1
             return stats
 
+        group_names = {g["name"] for g in groups if isinstance(g, dict) and "name" in g}
+        seen_projects: set[str] = set()
+
         for group in groups:
             if self._check_shutdown():
                 stats.interrupted = True
@@ -66,7 +69,10 @@ class Cleaner:
                 logger.debug("Group %s not in scope — skipping", group_name)
                 continue
             stats.groups_processed += 1
-            self._process_group(group_name, cutoff, stats)
+            self._process_group(group_name, cutoff, stats, seen_projects)
+
+        if not stats.interrupted:
+            self._warn_unmatched(group_names, seen_projects)
 
         status = "Cycle interrupted" if stats.interrupted else "Cycle complete"
         logger.info(
@@ -81,7 +87,9 @@ class Cleaner:
         )
         return stats
 
-    def _process_group(self, group: str, cutoff: datetime, stats: CycleStats) -> None:
+    def _process_group(
+        self, group: str, cutoff: datetime, stats: CycleStats, seen_projects: set[str]
+    ) -> None:
         try:
             projects = self.client.list_projects(group)
         except APIError:
@@ -99,11 +107,18 @@ class Cleaner:
                 logger.warning("Project entry missing 'name' key in group %s — skipping", group)
                 stats.errors += 1
                 continue
+            seen_projects.add(project_name)
             if self.target_projects and project_name not in self.target_projects:
                 logger.debug("Project %s/%s not in scope — skipping", group, project_name)
                 continue
             stats.projects_processed += 1
             self._process_project(group, project_name, cutoff, stats)
+
+    def _warn_unmatched(self, group_names: set[str], seen_projects: set[str]) -> None:
+        for group in sorted(self.target_groups - group_names):
+            logger.warning("Group filter %r matched no group in the org", group)
+        for project in sorted(self.target_projects - seen_projects):
+            logger.warning("Project filter %r matched no project in scope", project)
 
     def _process_project(
         self, group: str, project: str, cutoff: datetime, stats: CycleStats
