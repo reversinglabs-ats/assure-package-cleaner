@@ -99,6 +99,9 @@ class Cleaner:
                 logger.warning("Project entry missing 'name' key in group %s — skipping", group)
                 stats.errors += 1
                 continue
+            if self.target_projects and project_name not in self.target_projects:
+                logger.debug("Project %s/%s not in scope — skipping", group, project_name)
+                continue
             stats.projects_processed += 1
             self._process_project(group, project_name, cutoff, stats)
 

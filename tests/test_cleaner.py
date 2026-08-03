@@ -963,3 +963,55 @@ class TestGroupScoping:
         assert stats.deleted == 0
         client.list_projects.assert_not_called()
         client.delete_package.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Project scoping
+# ---------------------------------------------------------------------------
+
+
+class TestProjectScoping:
+    def test_only_matching_project_is_walked(self):
+        client = MagicMock()
+        client.list_groups.return_value = [{"name": "grp"}]
+        client.list_projects.return_value = [{"name": "proj-a"}, {"name": "proj-b"}]
+        client.list_packages.return_value = []
+
+        cleaner = _make_cleaner(client=client, target_projects=frozenset({"proj-a"}))
+        stats = cleaner.run_cycle()
+
+        assert stats.projects_processed == 1
+        client.list_packages.assert_called_once_with("grp", "proj-a")
+
+    def test_project_filter_spans_all_groups(self):
+        client = MagicMock()
+        client.list_groups.return_value = [{"name": "grp1"}, {"name": "grp2"}]
+        client.list_projects.side_effect = [
+            [{"name": "proj-x"}, {"name": "proj-y"}],
+            [{"name": "proj-x"}, {"name": "proj-z"}],
+        ]
+        client.list_packages.return_value = []
+
+        cleaner = _make_cleaner(client=client, target_projects=frozenset({"proj-x"}))
+        stats = cleaner.run_cycle()
+
+        assert stats.projects_processed == 2
+        walked = {call.args for call in client.list_packages.call_args_list}
+        assert walked == {("grp1", "proj-x"), ("grp2", "proj-x")}
+
+    def test_group_and_project_filter_together(self):
+        client = MagicMock()
+        client.list_groups.return_value = [{"name": "grp1"}, {"name": "grp2"}]
+        client.list_projects.return_value = [{"name": "proj-a"}, {"name": "proj-b"}]
+        client.list_packages.return_value = []
+
+        cleaner = _make_cleaner(
+            client=client,
+            target_groups=frozenset({"grp1"}),
+            target_projects=frozenset({"proj-b"}),
+        )
+        stats = cleaner.run_cycle()
+
+        assert stats.groups_processed == 1
+        assert stats.projects_processed == 1
+        client.list_packages.assert_called_once_with("grp1", "proj-b")
