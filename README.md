@@ -19,7 +19,7 @@ In no event shall the developer be liable for any direct, indirect, incidental, 
 
 ## How it works
 
-Each cleanup cycle walks the full organization tree: **groups > projects > packages > versions**. For every package, it fetches the analysis timestamp of each version and applies the following rules:
+Each cleanup cycle walks the organization tree: **groups > projects > packages > versions** — the full org by default, or a subset when scoped with `SPECTRA_ASSURE_GROUP` / `SPECTRA_ASSURE_PROJECT` (see [Scoping](#scoping)). For every package, it fetches the analysis timestamp of each version and applies the following rules:
 
 - **A package is deleted only when every version's analysis timestamp is older than the threshold.** This is the core safety rule — if even one version is recent, the entire package is kept.
 - **If any API call fails while evaluating a package, that package is skipped entirely.** The tool never deletes what it cannot fully evaluate.
@@ -41,12 +41,36 @@ All configuration is via environment variables. No config files are needed.
 |----------|----------|---------|-------------|
 | `SPECTRA_ASSURE_BASE_URL` | Yes | — | Portal URL, e.g. `https://my.secure.software/acme-corp`. The org can be in the path, derived from the subdomain, or set explicitly via `SPECTRA_ASSURE_ORG` |
 | `SPECTRA_ASSURE_ORG` | No | — | Override the organization name. When set, the org is not parsed from the URL. Useful for instances like `https://example.secure.software` |
+| `SPECTRA_ASSURE_GROUP` | No | — (all groups) | Comma-separated list of group names to clean. When set, only these groups are walked. See [Scoping](#scoping) |
+| `SPECTRA_ASSURE_PROJECT` | No | — (all projects) | Comma-separated list of project names to clean, matched within each walked group. See [Scoping](#scoping) |
 | `SPECTRA_API_TOKEN` | Yes | — | Personal access token (PAT) for Bearer auth |
 | `STALE_THRESHOLD_DAYS` | No | `180` | Minimum age in days. Packages where every version was last analyzed more than this many days ago are eligible for deletion |
 | `CLEANUP_INTERVAL_HOURS` | No | `24` | Hours between cleanup cycles. Set to `0` for a single run then exit |
 | `DRY_RUN` | No | `true` | Set to `false`, `0`, or `no` to enable actual deletions. Any other value (including typos) keeps dry-run enabled |
 | `REQUEST_DELAY_SECONDS` | No | `0.5` | Delay in seconds between API calls to avoid overwhelming the portal |
 | `LOG_LEVEL` | No | `INFO` | Python logging level (`DEBUG`, `INFO`, `WARNING`, `ERROR`) |
+
+### Scoping
+
+By default the tool walks every group and project in the organization. Two
+optional variables narrow that walk. They are **independent filters**:
+
+- `SPECTRA_ASSURE_GROUP` restricts which **groups** are walked. Unset = all groups.
+- `SPECTRA_ASSURE_PROJECT` restricts which **projects** are walked, by name,
+  within each walked group. Unset = all projects.
+
+| Env | Meaning |
+|-----|---------|
+| `SPECTRA_ASSURE_GROUP=foo` | Everything in group `foo` |
+| `SPECTRA_ASSURE_GROUP=foo,baz` | Everything in groups `foo` and `baz` |
+| `SPECTRA_ASSURE_GROUP=foo` + `SPECTRA_ASSURE_PROJECT=bar` | Only project `bar` in group `foo` |
+| `SPECTRA_ASSURE_PROJECT=bar` (no group) | Project `bar` in every group that has one |
+| `SPECTRA_ASSURE_GROUP=foo,baz` + `SPECTRA_ASSURE_PROJECT=bar,qux` | Projects `bar`/`qux` wherever they appear in `foo`/`baz` |
+
+Each variable is a comma-separated list; surrounding whitespace is ignored.
+Setting `SPECTRA_ASSURE_PROJECT` without `SPECTRA_ASSURE_GROUP` matches that
+project name across all groups. At the end of a cycle, any filter value that
+matched no group or project is logged as a warning, so typos surface quickly.
 
 ## Usage
 
@@ -88,6 +112,21 @@ docker run --rm \
   -e SPECTRA_API_TOKEN=your-token-here \
   -e STALE_THRESHOLD_DAYS=365 \
   -e DRY_RUN=false \
+  assure-package-cleaner
+
+# Scope to a single group — walk only group "acme-team"
+docker run --rm \
+  -e SPECTRA_ASSURE_BASE_URL=https://my.secure.software/acme-corp \
+  -e SPECTRA_API_TOKEN=your-token-here \
+  -e SPECTRA_ASSURE_GROUP=acme-team \
+  assure-package-cleaner
+
+# Scope to one project in one group
+docker run --rm \
+  -e SPECTRA_ASSURE_BASE_URL=https://my.secure.software/acme-corp \
+  -e SPECTRA_API_TOKEN=your-token-here \
+  -e SPECTRA_ASSURE_GROUP=acme-team \
+  -e SPECTRA_ASSURE_PROJECT=billing-service \
   assure-package-cleaner
 ```
 

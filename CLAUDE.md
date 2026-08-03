@@ -2,7 +2,7 @@
 
 ## What this project is
 
-A Python CLI/Docker tool that automatically deletes stale packages from the ReversingLabs Spectra Assure portal. It walks all groups/projects/packages in an organization and deletes packages where **every** version has an analysis timestamp older than a configurable threshold. Designed to run as a long-lived Docker container on a schedule, or as a one-shot invocation.
+A Python CLI/Docker tool that automatically deletes stale packages from the ReversingLabs Spectra Assure portal. It walks the groups/projects/packages in an organization — the whole org by default, or a subset when scoped via `SPECTRA_ASSURE_GROUP` / `SPECTRA_ASSURE_PROJECT` — and deletes packages where **every** version has an analysis timestamp older than a configurable threshold. Designed to run as a long-lived Docker container on a schedule, or as a one-shot invocation.
 
 ## Quick reference
 
@@ -45,7 +45,7 @@ Dockerfile           # Multi-stage Chainguard build
 ## Architecture decisions
 
 - **No SDK dependency.** The Spectra Assure API is called directly with `requests`. The API is simple (6 endpoints, no pagination, no auth refresh).
-- **Stateless.** No database, no files, no persistent state. Every cycle walks the full tree from scratch.
+- **Stateless.** No database, no files, no persistent state. Every cycle walks the tree (full org, or the configured group/project scope) from scratch.
 - **Fail-safe deletion rule.** A package is only deleted when ALL versions are confirmed stale. If any `/status/` call fails, that package is skipped entirely — never delete what you can't fully evaluate.
 - **Short-circuit.** When evaluating versions, the first fresh version found causes the package to be skipped immediately (no further `/status/` calls).
 - **DRY_RUN defaults to true.** This is intentional and must stay this way — the tool deletes things permanently.
@@ -56,6 +56,8 @@ Dockerfile           # Multi-stage Chainguard build
 |----------|----------|---------|-------|
 | `SPECTRA_ASSURE_BASE_URL` | Yes | — | e.g. `https://my.secure.software/acme-corp` — org resolution: `SPECTRA_ASSURE_ORG` override > URL path segment > subdomain (capitalized) |
 | `SPECTRA_ASSURE_ORG` | No | — | Explicit org override. Required for hosts like `localhost` with no path or subdomain |
+| `SPECTRA_ASSURE_GROUP` | No | — | Comma-separated group names to restrict the walk. Empty = all groups |
+| `SPECTRA_ASSURE_PROJECT` | No | — | Comma-separated project names to restrict the walk, matched within each walked group. Empty = all projects |
 | `SPECTRA_API_TOKEN` | Yes | — | Bearer token (PAT) |
 | `STALE_THRESHOLD_DAYS` | No | `180` | Minimum 1 |
 | `CLEANUP_INTERVAL_HOURS` | No | `24` | `0` = single run and exit |
