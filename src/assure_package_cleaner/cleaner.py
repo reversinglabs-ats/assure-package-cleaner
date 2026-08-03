@@ -54,6 +54,7 @@ class Cleaner:
 
         group_names = {g["name"] for g in groups if isinstance(g, dict) and "name" in g}
         seen_projects: set[str] = set()
+        projects_fully_listed = True
 
         for group in groups:
             if self._check_shutdown():
@@ -69,10 +70,11 @@ class Cleaner:
                 logger.debug("Group %s not in scope — skipping", group_name)
                 continue
             stats.groups_processed += 1
-            self._process_group(group_name, cutoff, stats, seen_projects)
+            if not self._process_group(group_name, cutoff, stats, seen_projects):
+                projects_fully_listed = False
 
         if not stats.interrupted:
-            self._warn_unmatched(group_names, seen_projects)
+            self._warn_unmatched(group_names, seen_projects, projects_fully_listed)
 
         status = "Cycle interrupted" if stats.interrupted else "Cycle complete"
         logger.info(
@@ -89,18 +91,19 @@ class Cleaner:
 
     def _process_group(
         self, group: str, cutoff: datetime, stats: CycleStats, seen_projects: set[str]
-    ) -> None:
+    ) -> bool:
+        """Walk a group's projects. Returns False if the project listing failed."""
         try:
             projects = self.client.list_projects(group)
         except APIError:
             logger.exception("Failed to list projects in group %s — skipping group", group)
             stats.errors += 1
-            return
+            return False
 
         for project in projects:
             if self._check_shutdown():
                 stats.interrupted = True
-                return
+                return True
             try:
                 project_name = project["name"]
             except KeyError:
@@ -113,12 +116,16 @@ class Cleaner:
                 continue
             stats.projects_processed += 1
             self._process_project(group, project_name, cutoff, stats)
+        return True
 
-    def _warn_unmatched(self, group_names: set[str], seen_projects: set[str]) -> None:
+    def _warn_unmatched(
+        self, group_names: set[str], seen_projects: set[str], projects_fully_listed: bool
+    ) -> None:
         for group in sorted(self.target_groups - group_names):
             logger.warning("Group filter %r matched no group in the org", group)
-        for project in sorted(self.target_projects - seen_projects):
-            logger.warning("Project filter %r matched no project in scope", project)
+        if projects_fully_listed:
+            for project in sorted(self.target_projects - seen_projects):
+                logger.warning("Project filter %r matched no project in scope", project)
 
     def _process_project(
         self, group: str, project: str, cutoff: datetime, stats: CycleStats

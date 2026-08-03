@@ -1078,3 +1078,40 @@ class TestScopeWarnings:
             cleaner.run_cycle()
 
         assert any("proj-x" in r.message for r in caplog.records)
+
+    def test_project_warning_suppressed_when_group_listing_errors(self, caplog):
+        client = MagicMock()
+        client.list_groups.return_value = [{"name": "grp1"}]
+        client.list_projects.side_effect = APIError("GET", "url", 500, "err")
+
+        cleaner = _make_cleaner(client=client, target_projects=frozenset({"proj-x"}))
+        with caplog.at_level("WARNING"):
+            stats = cleaner.run_cycle()
+
+        assert stats.errors == 1
+        # The group's project listing failed, so we cannot conclude proj-x is unmatched.
+        assert not any("proj-x" in r.message for r in caplog.records)
+
+    def test_no_warnings_when_interrupted(self, caplog):
+        shutdown = threading.Event()
+        client = MagicMock()
+        client.list_groups.return_value = [{"name": "grp1"}, {"name": "grp2"}]
+
+        def stop_during_walk(group):
+            shutdown.set()
+            return []
+
+        client.list_projects.side_effect = stop_during_walk
+
+        # These filters are unmatched, but the interrupt must suppress the
+        # end-of-cycle warning entirely.
+        cleaner = _make_cleaner(
+            client=client,
+            shutdown=shutdown,
+            target_projects=frozenset({"unmatched-proj"}),
+        )
+        with caplog.at_level("WARNING"):
+            stats = cleaner.run_cycle()
+
+        assert stats.interrupted is True
+        assert [r for r in caplog.records if r.levelname == "WARNING"] == []
