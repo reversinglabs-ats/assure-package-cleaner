@@ -67,14 +67,28 @@ optional variables narrow that walk. They are **independent filters**:
 | `SPECTRA_ASSURE_PROJECT=bar` (no group) | Project `bar` in every group that has one |
 | `SPECTRA_ASSURE_GROUP=foo,baz` + `SPECTRA_ASSURE_PROJECT=bar,qux` | Projects `bar`/`qux` wherever they appear in `foo`/`baz` |
 
-Each variable is a comma-separated list; surrounding whitespace is ignored.
-Setting `SPECTRA_ASSURE_PROJECT` without `SPECTRA_ASSURE_GROUP` matches that
-project name across all groups. At the end of a cycle, any filter value that
-matched no group or project is logged as a warning, so typos surface quickly.
-If a scope variable is set but contains no usable name (only whitespace or
-commas), the tool warns at startup and treats it as unset — meaning **no
-scope, i.e. the whole org** — so a malformed value never silently narrows or
-widens the walk unnoticed.
+Each variable is a comma-separated list; whitespace around each name is
+ignored. Setting `SPECTRA_ASSURE_PROJECT` without `SPECTRA_ASSURE_GROUP`
+matches that project name across all groups.
+
+Names are matched **exactly** against what the API returns — case-sensitive,
+and sensitive to whitespace and Unicode normalization on the API's side (the
+value you set is stripped, the API's name is not). A near-miss therefore
+matches nothing and is reported as a typo, so scoping always fails closed:
+nothing is deleted for a name that does not match.
+
+At the end of a cycle, any filter value that matched no group or project is
+logged as a warning, so typos surface quickly. These warnings are per cycle
+and are suppressed when the walk was incomplete — an interrupted cycle, or a
+group whose project listing failed — to avoid false alarms; likewise, an
+unmatched group filter suppresses the project warnings it would otherwise
+make meaningless.
+
+If a scope variable is set but contains no usable name — empty, or only
+whitespace and commas — the tool warns at startup and treats it as unset,
+meaning **no scope, i.e. the whole org**. This covers `-e VAR=` and a Compose
+`${VAR}` that interpolates to nothing, so a malformed value never silently
+narrows or widens the walk unnoticed.
 
 ## Usage
 
@@ -170,7 +184,7 @@ pip install -e ".[dev]"
 .venv/bin/ruff format --check .   # check formatting
 .venv/bin/ruff check --no-fix .   # lint
 .venv/bin/mypy src tests          # type check
-.venv/bin/pytest                  # run tests (174 tests, <1s)
+.venv/bin/pytest                  # run tests (187 tests, <1s)
 ```
 
 ### Project layout
@@ -186,6 +200,7 @@ tests/
   test_config.py     # env var parsing, validation, defaults
   test_client.py     # API methods, errors, auth, delays, network exceptions
   test_cleaner.py    # staleness logic, short-circuit, fail-safe, dry-run
+  test_main.py       # config to cleaner wiring
 Dockerfile           # multi-stage Chainguard build
 ```
 
