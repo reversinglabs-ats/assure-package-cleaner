@@ -52,7 +52,9 @@ class Cleaner:
             stats.errors += 1
             return stats
 
-        group_names = {g["name"] for g in groups if isinstance(g, dict) and "name" in g}
+        group_names = {
+            g["name"] for g in groups if isinstance(g, dict) and isinstance(g.get("name"), str)
+        }
         seen_projects: set[str] = set()
         projects_fully_listed = True
 
@@ -60,10 +62,12 @@ class Cleaner:
             if self._check_shutdown():
                 stats.interrupted = True
                 break
-            try:
-                group_name = group["name"]
-            except KeyError:
-                logger.warning("Group entry missing 'name' key: %r — skipping", group)
+            # A non-dict entry, a missing 'name', or a non-string name must all skip the
+            # entry rather than raise: an exception here aborts the cycle part-way through,
+            # after earlier groups have already had packages deleted.
+            group_name = group.get("name") if isinstance(group, dict) else None
+            if not isinstance(group_name, str):
+                logger.warning("Malformed group entry: %r — skipping", group)
                 stats.errors += 1
                 continue
             if self.target_groups and group_name not in self.target_groups:
@@ -121,9 +125,12 @@ class Cleaner:
     def _warn_unmatched(
         self, group_names: set[str], seen_projects: set[str], projects_fully_listed: bool
     ) -> None:
-        for group in sorted(self.target_groups - group_names):
+        unmatched_groups = self.target_groups - group_names
+        for group in sorted(unmatched_groups):
             logger.warning("Group filter %r matched no group in the org", group)
-        if projects_fully_listed:
+        # A group filter that matched nothing means no project listing ever happened for it,
+        # so every project filter would look unmatched — suppress the phantom warnings.
+        if projects_fully_listed and not unmatched_groups:
             for project in sorted(self.target_projects - seen_projects):
                 logger.warning("Project filter %r matched no project in scope", project)
 

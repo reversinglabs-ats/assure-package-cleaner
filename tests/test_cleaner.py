@@ -633,6 +633,35 @@ class TestMissingKeys:
         assert stats.deleted == 0
         client.delete_package.assert_not_called()
 
+    def test_non_dict_group_entry_skipped_not_fatal(self):
+        """A non-dict group entry must be skipped, not crash the cycle mid-walk.
+
+        Regression: the earlier groups have already been walked (and, outside dry-run,
+        really deleted) by the time a raised TypeError would abort the cycle.
+        """
+        client = MagicMock()
+        client.list_groups.return_value = ["bogus", {"name": "later-grp"}]
+        client.list_projects.return_value = []
+
+        cleaner = _make_cleaner(client=client)
+        stats = cleaner.run_cycle()
+
+        assert stats.errors == 1
+        assert stats.groups_processed == 1
+        client.list_projects.assert_called_once_with("later-grp")
+
+    def test_unhashable_group_name_skipped_not_fatal(self):
+        client = MagicMock()
+        client.list_groups.return_value = [{"name": ["not", "a", "string"]}, {"name": "good-grp"}]
+        client.list_projects.return_value = []
+
+        cleaner = _make_cleaner(client=client, target_groups=frozenset({"good-grp"}))
+        stats = cleaner.run_cycle()
+
+        assert stats.errors == 1
+        assert stats.groups_processed == 1
+        client.list_projects.assert_called_once_with("good-grp")
+
     def test_bad_item_does_not_block_good_items(self):
         """A malformed group entry should not prevent processing subsequent groups."""
         client = MagicMock()
@@ -1078,6 +1107,27 @@ class TestScopeWarnings:
             cleaner.run_cycle()
 
         assert any("proj-x" in r.message for r in caplog.records)
+
+    def test_project_warning_suppressed_when_group_filter_unmatched(self, caplog):
+        """A group typo must not manufacture phantom project typos.
+
+        proj-a exists in grp1, but the unmatched group filter means no project
+        listing ever happened — reporting proj-a as unmatched would be false.
+        """
+        client = MagicMock()
+        client.list_groups.return_value = [{"name": "grp1"}]
+        client.list_projects.return_value = [{"name": "proj-a"}]
+
+        cleaner = _make_cleaner(
+            client=client,
+            target_groups=frozenset({"grp-typo"}),
+            target_projects=frozenset({"proj-a"}),
+        )
+        with caplog.at_level("WARNING"):
+            cleaner.run_cycle()
+
+        assert any("grp-typo" in r.message for r in caplog.records)
+        assert not any("proj-a" in r.message for r in caplog.records)
 
     def test_project_warning_suppressed_when_group_listing_errors(self, caplog):
         client = MagicMock()
