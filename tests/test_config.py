@@ -512,6 +512,37 @@ class TestScopingConfig:
             for r in caplog.records
         )
 
+    def test_group_set_to_empty_string_warns(self, caplog):
+        """`-e SPECTRA_ASSURE_GROUP=` must not silently widen the walk to the whole org."""
+        with patch.dict("os.environ", _env(SPECTRA_ASSURE_GROUP=""), clear=True):
+            with caplog.at_level("WARNING"):
+                cfg = Config.from_env()
+        assert cfg.target_groups == frozenset()
+        assert any(
+            "SPECTRA_ASSURE_GROUP is set but contains no usable names" in r.message
+            for r in caplog.records
+        )
+
+    def test_project_set_to_empty_string_warns(self, caplog):
+        with patch.dict("os.environ", _env(SPECTRA_ASSURE_PROJECT=""), clear=True):
+            with caplog.at_level("WARNING"):
+                cfg = Config.from_env()
+        assert cfg.target_projects == frozenset()
+        assert any(
+            "SPECTRA_ASSURE_PROJECT is set but contains no usable names" in r.message
+            for r in caplog.records
+        )
+
+    def test_group_and_project_are_not_transposed(self):
+        with patch.dict(
+            "os.environ",
+            _env(SPECTRA_ASSURE_GROUP="grp-a", SPECTRA_ASSURE_PROJECT="proj-x"),
+            clear=True,
+        ):
+            cfg = Config.from_env()
+        assert cfg.target_groups == frozenset({"grp-a"})
+        assert cfg.target_projects == frozenset({"proj-x"})
+
     def test_unset_does_not_warn(self, caplog):
         with patch.dict("os.environ", _env(), clear=True):
             with caplog.at_level("WARNING"):
