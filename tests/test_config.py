@@ -502,35 +502,25 @@ class TestScopingConfig:
             cfg = Config.from_env()
         assert cfg.target_groups == frozenset()
 
-    def test_set_but_empty_warns(self, caplog):
+    def test_set_but_empty_warns(self, capsys):
         with patch.dict("os.environ", _env(SPECTRA_ASSURE_GROUP=" , , "), clear=True):
-            with caplog.at_level("WARNING"):
-                cfg = Config.from_env()
+            cfg = Config.from_env()
         assert cfg.target_groups == frozenset()
-        assert any(
-            "SPECTRA_ASSURE_GROUP is set but contains no usable names" in r.message
-            for r in caplog.records
-        )
+        assert "SPECTRA_ASSURE_GROUP is set but contains no usable names" in capsys.readouterr().err
 
-    def test_group_set_to_empty_string_warns(self, caplog):
+    def test_group_set_to_empty_string_warns(self, capsys):
         """`-e SPECTRA_ASSURE_GROUP=` must not silently widen the walk to the whole org."""
         with patch.dict("os.environ", _env(SPECTRA_ASSURE_GROUP=""), clear=True):
-            with caplog.at_level("WARNING"):
-                cfg = Config.from_env()
+            cfg = Config.from_env()
         assert cfg.target_groups == frozenset()
-        assert any(
-            "SPECTRA_ASSURE_GROUP is set but contains no usable names" in r.message
-            for r in caplog.records
-        )
+        assert "SPECTRA_ASSURE_GROUP is set but contains no usable names" in capsys.readouterr().err
 
-    def test_project_set_to_empty_string_warns(self, caplog):
+    def test_project_set_to_empty_string_warns(self, capsys):
         with patch.dict("os.environ", _env(SPECTRA_ASSURE_PROJECT=""), clear=True):
-            with caplog.at_level("WARNING"):
-                cfg = Config.from_env()
+            cfg = Config.from_env()
         assert cfg.target_projects == frozenset()
-        assert any(
-            "SPECTRA_ASSURE_PROJECT is set but contains no usable names" in r.message
-            for r in caplog.records
+        assert (
+            "SPECTRA_ASSURE_PROJECT is set but contains no usable names" in capsys.readouterr().err
         )
 
     def test_group_and_project_are_not_transposed(self):
@@ -543,11 +533,17 @@ class TestScopingConfig:
         assert cfg.target_groups == frozenset({"grp-a"})
         assert cfg.target_projects == frozenset({"proj-x"})
 
-    def test_unset_does_not_warn(self, caplog):
+    def test_unset_does_not_warn(self, capsys):
         with patch.dict("os.environ", _env(), clear=True):
-            with caplog.at_level("WARNING"):
-                Config.from_env()
-        assert not any("no usable names" in r.message for r in caplog.records)
+            Config.from_env()
+        assert "no usable names" not in capsys.readouterr().err
+
+    def test_warning_is_emitted_even_when_log_level_silences_logging(self, capsys):
+        """The warning must survive LOG_LEVEL=ERROR — it is the only signal that
+        a malformed scope var widened the walk to the whole org."""
+        with patch.dict("os.environ", _env(SPECTRA_ASSURE_GROUP="", LOG_LEVEL="ERROR"), clear=True):
+            Config.from_env()
+        assert "no usable names" in capsys.readouterr().err
 
     def test_project_comma_list(self):
         with patch.dict("os.environ", _env(SPECTRA_ASSURE_PROJECT="p1,p2"), clear=True):

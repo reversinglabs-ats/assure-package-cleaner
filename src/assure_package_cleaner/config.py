@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import sys
 from dataclasses import dataclass
 from urllib.parse import urlparse
 
@@ -151,10 +152,15 @@ def _parse_csv_set(name: str) -> frozenset[str]:
     raw = os.environ.get(name)
     result = frozenset(item.strip() for item in (raw or "").split(",") if item.strip())
     if raw is not None and not result:
-        logger.warning(
-            "%s is set but contains no usable names — treating as no scope (all). "
-            "Check for stray whitespace or commas.",
-            name,
+        # from_env() runs before logging is configured, so a logger call here would go out
+        # through logging.lastResort: unformatted, and invisible to a structured-log
+        # pipeline. Print to stderr like the ConfigError handler in __main__ instead —
+        # that also keeps the warning unconditional, where routing it through the root
+        # logger would let LOG_LEVEL=ERROR silence the one signal that scope widened.
+        print(  # noqa: T201
+            f"WARNING: {name} is set but contains no usable names — "
+            "treating as no scope (all). Check for stray whitespace or commas.",
+            file=sys.stderr,
         )
     return result
 
