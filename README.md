@@ -196,7 +196,7 @@ pip install -e ".[dev]"
 .venv/bin/ruff format --check .   # check formatting
 .venv/bin/ruff check --no-fix .   # lint
 .venv/bin/mypy src tests          # type check
-.venv/bin/pytest                  # run tests (197 tests, <1s)
+.venv/bin/pytest                  # run tests (203 tests, <1s)
 ```
 
 ### Project layout

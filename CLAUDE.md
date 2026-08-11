@@ -17,7 +17,7 @@ A Python CLI/Docker tool that automatically deletes stale packages from the Reve
 # Type check
 .venv/bin/mypy src tests
 
-# Run tests (197 tests, should complete in <1s)
+# Run tests (203 tests, should complete in <1s)
 .venv/bin/pytest
 
 # Run the app locally (requires env vars — see below)
@@ -38,8 +38,8 @@ src/assure_package_cleaner/
 tests/
   test_config.py     # 75 tests — env var parsing, validation, defaults, scoping
   test_client.py     # 43 tests — API methods, errors, auth, delay
-  test_cleaner.py    # 76 tests — staleness logic, short-circuit, fail-safe, dry-run, scoping
-  test_main.py       # 3 tests  — config → cleaner wiring (scope must not widen the walk)
+  test_cleaner.py    # 78 tests — staleness logic, short-circuit, fail-safe, dry-run, scoping
+  test_main.py       # 7 tests  — config → cleaner/client wiring (dry_run and scope must survive it)
 Dockerfile           # Multi-stage Chainguard build
 ```
 
@@ -57,8 +57,8 @@ Dockerfile           # Multi-stage Chainguard build
 |----------|----------|---------|-------|
 | `SPECTRA_ASSURE_BASE_URL` | Yes | — | e.g. `https://my.secure.software/acme-corp` — org resolution: `SPECTRA_ASSURE_ORG` override > URL path segment > subdomain (capitalized) |
 | `SPECTRA_ASSURE_ORG` | No | — | Explicit org override. Required for hosts like `localhost` with no path or subdomain |
-| `SPECTRA_ASSURE_GROUP` | No | — | Comma-separated group names to restrict the walk. Empty = all groups |
-| `SPECTRA_ASSURE_PROJECT` | No | — | Comma-separated project names to restrict the walk, matched within each walked group. Empty = all projects |
+| `SPECTRA_ASSURE_GROUP` | No | — | Comma-separated group names to restrict the walk. Set-but-empty warns to stderr and means all groups |
+| `SPECTRA_ASSURE_PROJECT` | No | — | Comma-separated project names to restrict the walk, matched within each walked group. Set-but-empty warns to stderr and means all projects |
 | `SPECTRA_API_TOKEN` | Yes | — | Bearer token (PAT) |
 | `STALE_THRESHOLD_DAYS` | No | `180` | Minimum 1 |
 | `CLEANUP_INTERVAL_HOURS` | No | `24` | `0` = single run and exit |
@@ -100,3 +100,6 @@ No pagination. Auth is `Authorization: Bearer <token>`.
 - Never delete individual versions — only whole packages via the DELETE endpoint.
 - The `pkg:rl/` prefix in URL paths is literal and required by the API.
 - Token masking in `config.py` assumes the token is at least 8 characters (shows first 4 + last 4).
+- Every listing entry goes through `_entry_name()` in `cleaner.py`. A malformed entry must **skip**, never raise — an exception mid-walk aborts the cycle after earlier packages have already been deleted. It rejects non-dicts, missing keys, non-string values, and blank names (which would build a URL with an empty path segment).
+- Groups are de-duplicated by name before walking. A repeated group would evaluate its packages twice, inflating `deleted` and turning the second DELETE into a 404 counted as an error.
+- `tests/test_main.py` exists because `__main__` is where `DRY_RUN` and the scope filters meet the `Cleaner`. A wiring slip there is the one class of bug that **over**-deletes, and type checking can't catch it — `target_groups`/`target_projects` are both `frozenset[str]`. Assert kwargs there, not just in `test_config.py`.
