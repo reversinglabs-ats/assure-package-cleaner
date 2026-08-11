@@ -20,6 +20,15 @@ jobs:
           python-version: "3.12"
           cache: pip
 
+      # Nothing installs from uv.lock — CI and the Dockerfile both pip install from
+      # pyproject.toml — so its only consumer is the Trivy filesystem scan in
+      # security.yml. Left unchecked it drifts, and Trivy then reports CVEs against
+      # versions that are never shipped. This keeps it honest.
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+
+      - name: Check uv.lock is in sync with pyproject.toml
+        run: uv lock --check
+
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
