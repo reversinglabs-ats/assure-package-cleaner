@@ -52,9 +52,6 @@ class Cleaner:
             stats.errors += 1
             return stats
 
-        # `groups` is iterated twice — here and in the loop below — so the client must keep
-        # returning a concrete list rather than a generator.
-        group_names = {name for g in groups if (name := _entry_name(g)) is not None}
         seen_projects: set[str] = set()
         walked_groups: set[str] = set()
         projects_fully_listed = True
@@ -68,10 +65,10 @@ class Cleaner:
                 logger.warning("Malformed group entry: %r — skipping", group)
                 stats.errors += 1
                 continue
+            # Checked above the scope filter on purpose: a misbehaving server's duplicates
+            # are worth surfacing even for groups we would not walk.
             if group_name in walked_groups:
-                # Walking a repeated group would evaluate its packages twice, inflating
-                # `deleted` and turning the second DELETE into a 404 counted as an error.
-                logger.warning("Duplicate group entry %r — already walked, skipping", group_name)
+                logger.warning("Duplicate group entry %r — already seen, skipping", group_name)
                 continue
             walked_groups.add(group_name)
             if self.target_groups and group_name not in self.target_groups:
@@ -82,7 +79,7 @@ class Cleaner:
                 projects_fully_listed = False
 
         if not stats.interrupted:
-            self._warn_unmatched(group_names, seen_projects, projects_fully_listed)
+            self._warn_unmatched(walked_groups, seen_projects, projects_fully_listed)
 
         status = "Cycle interrupted" if stats.interrupted else "Cycle complete"
         logger.info(
@@ -108,6 +105,9 @@ class Cleaner:
             stats.errors += 1
             return False
 
+        # Per group, not global: the same project name legitimately appears in many groups.
+        walked_projects: set[str] = set()
+
         for project in projects:
             if self._check_shutdown():
                 stats.interrupted = True
@@ -117,6 +117,12 @@ class Cleaner:
                 logger.warning("Malformed project entry in group %s: %r — skipping", group, project)
                 stats.errors += 1
                 continue
+            if project_name in walked_projects:
+                logger.warning(
+                    "Duplicate project entry %s/%s — already seen, skipping", group, project_name
+                )
+                continue
+            walked_projects.add(project_name)
             seen_projects.add(project_name)
             if self.target_projects and project_name not in self.target_projects:
                 logger.debug("Project %s/%s not in scope — skipping", group, project_name)
@@ -147,6 +153,11 @@ class Cleaner:
             stats.errors += 1
             return
 
+        # Unlike groups and projects, this listing is iterated in memory with no re-list
+        # between deletes, so a repeat is a second DELETE of something already gone — a
+        # redundant destructive attempt that 404s into `errors`.
+        walked_packages: set[str] = set()
+
         for package in packages:
             if self._check_shutdown():
                 stats.interrupted = True
@@ -158,6 +169,15 @@ class Cleaner:
                 )
                 stats.errors += 1
                 continue
+            if package_name in walked_packages:
+                logger.warning(
+                    "Duplicate package entry %s/%s/%s — already seen, skipping",
+                    group,
+                    project,
+                    package_name,
+                )
+                continue
+            walked_packages.add(package_name)
             stats.packages_evaluated += 1
             self._evaluate_package(group, project, package_name, cutoff, stats)
 

@@ -693,6 +693,68 @@ class TestMissingKeys:
         assert stats.groups_processed == 1
         client.list_projects.assert_called_once_with("grp")
 
+    def test_hashable_non_string_name_skipped(self):
+        """The guard rejects any non-string name, not only unhashable ones — an int
+        would otherwise be interpolated straight into the URL path."""
+        client = MagicMock()
+        client.list_groups.return_value = [{"name": 7}, {"name": "grp"}]
+        client.list_projects.return_value = [{"name": 7}, {"name": "proj"}]
+        client.list_packages.return_value = []
+
+        cleaner = _make_cleaner(client=client)
+        stats = cleaner.run_cycle()
+
+        assert stats.errors == 2
+        assert stats.groups_processed == 1
+        assert stats.projects_processed == 1
+        client.list_projects.assert_called_once_with("grp")
+        client.list_packages.assert_called_once_with("grp", "proj")
+
+    def test_duplicate_project_is_walked_once(self):
+        """Groups and projects re-list from the API on each pass, so a duplicate costs
+        wasted requests and an inflated projects_processed — not a second DELETE."""
+        client = MagicMock()
+        client.list_groups.return_value = [{"name": "grp"}]
+        client.list_projects.return_value = [{"name": "proj"}, {"name": "proj"}]
+        client.list_packages.return_value = []
+
+        cleaner = _make_cleaner(client=client)
+        stats = cleaner.run_cycle()
+
+        assert stats.projects_processed == 1
+        client.list_packages.assert_called_once_with("grp", "proj")
+
+    def test_duplicate_package_is_evaluated_once(self):
+        """A package listing is iterated in memory with no re-list between deletes, so a
+        repeat is a second DELETE of something already gone — a real 404 into errors."""
+        client = MagicMock()
+        client.list_groups.return_value = [{"name": "grp"}]
+        client.list_projects.return_value = [{"name": "proj"}]
+        client.list_packages.return_value = [{"name": "pkg"}, {"name": "pkg"}]
+        client.list_versions.return_value = [{"version": "1.0"}]
+        client.get_version_status.return_value = _status_response(_OLD_TIMESTAMP)
+
+        cleaner = _make_cleaner(client=client, dry_run=False)
+        stats = cleaner.run_cycle()
+
+        assert stats.packages_evaluated == 1
+        assert stats.deleted == 1
+        client.delete_package.assert_called_once_with("grp", "proj", "pkg")
+
+    def test_same_project_name_in_two_groups_is_not_deduped(self):
+        """The project gate is per group — the same name in another group is a
+        different project and must still be walked."""
+        client = MagicMock()
+        client.list_groups.return_value = [{"name": "grp1"}, {"name": "grp2"}]
+        client.list_projects.return_value = [{"name": "shared"}]
+        client.list_packages.return_value = []
+
+        cleaner = _make_cleaner(client=client)
+        stats = cleaner.run_cycle()
+
+        assert stats.projects_processed == 2
+        assert client.list_packages.call_count == 2
+
     def test_duplicate_group_is_walked_once(self):
         """A repeated group would evaluate its packages twice, inflating `deleted` and
         turning the second DELETE into a 404 counted as an error."""
