@@ -25,7 +25,7 @@ def main() -> None:
     try:
         cfg = Config.from_env()
     except ConfigError as exc:
-        print(f"Configuration error: {exc}", file=sys.stderr)  # noqa: T201
+        print(f"Configuration error: {exc}", file=sys.stderr)
         sys.exit(1)
 
     logging.basicConfig(
