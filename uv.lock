@@ -27,7 +27,7 @@ requires-dist = [
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.10" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
     { name = "requests", specifier = ">=2.33.1" },
-    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.4,<0.16" },
+    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.4" },
     { name = "types-requests", marker = "extra == 'dev'", specifier = ">=2.33.0.20260408" },
 ]
 provides-extras = ["dev"]

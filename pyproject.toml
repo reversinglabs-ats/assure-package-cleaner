@@ -14,7 +14,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
-  "ruff>=0.4,<0.16",
+  "ruff>=0.4",
   "mypy>=1.10",
   "pytest>=8.0",
   "types-requests>=2.33.0.20260408",
@@ -34,7 +34,16 @@ indent-style = "space"
 docstring-code-format = true
 
 [tool.ruff.lint]
-extend-select = [
+# An explicit `select`, not `extend-select`. `extend-select` adds to whatever ruff's
+# default rule set happens to be, so a ruff release that widens the defaults silently
+# widens our lint surface — that is what broke CI and forced the <0.16 pin. Listing the
+# rules outright makes the surface deterministic across versions; adopting a new rule
+# family is now a deliberate edit here.
+select = [
+  "E4",   # pycodestyle — ruff's default subset
+  "E7",
+  "E9",
+  "F",    # pyflakes
   "I",    # isort
   "UP",   # pyupgrade
   "B",    # bugbear
