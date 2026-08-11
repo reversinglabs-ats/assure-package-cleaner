@@ -17,7 +17,7 @@ A Python CLI/Docker tool that automatically deletes stale packages from the Reve
 # Type check
 .venv/bin/mypy src tests
 
-# Run tests (187 tests, should complete in <1s)
+# Run tests (197 tests, should complete in <1s)
 .venv/bin/pytest
 
 # Run the app locally (requires env vars — see below)
@@ -36,9 +36,9 @@ src/assure_package_cleaner/
   client.py          # SpectraClient: thin HTTP wrapper over the portal API
   cleaner.py         # Cleaner.run_cycle(): the group→project→package→version walk
 tests/
-  test_config.py     # 74 tests — env var parsing, validation, defaults, scoping
+  test_config.py     # 75 tests — env var parsing, validation, defaults, scoping
   test_client.py     # 43 tests — API methods, errors, auth, delay
-  test_cleaner.py    # 67 tests — staleness logic, short-circuit, fail-safe, dry-run, scoping
+  test_cleaner.py    # 76 tests — staleness logic, short-circuit, fail-safe, dry-run, scoping
   test_main.py       # 3 tests  — config → cleaner wiring (scope must not widen the walk)
 Dockerfile           # Multi-stage Chainguard build
 ```

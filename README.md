@@ -72,10 +72,18 @@ ignored. Setting `SPECTRA_ASSURE_PROJECT` without `SPECTRA_ASSURE_GROUP`
 matches that project name across all groups.
 
 Names are matched **exactly** against what the API returns — case-sensitive,
-and sensitive to whitespace and Unicode normalization on the API's side (the
-value you set is stripped, the API's name is not). A near-miss therefore
-matches nothing and is reported as a typo, so scoping always fails closed:
-nothing is deleted for a name that does not match.
+never substring, and sensitive to whitespace and Unicode normalization on the
+API's side (the value you set is stripped, the API's name is not). So
+`SPECTRA_ASSURE_PROJECT=api` scopes to a project named exactly `api`, never to
+`api-legacy` or `internal-api`. A near-miss matches nothing and is reported as
+a typo: **once a filter is in effect it fails closed**, and nothing is deleted
+for a name that does not match. The one case that does not narrow is a
+variable that parses to no name at all, covered below.
+
+A name containing a comma cannot be expressed — the list is split on `,` with
+no escape. Such a group or project can only be reached by leaving the variable
+unset and letting the walk cover it, and the only symptom is a "matched no
+group" warning for each half of the split name.
 
 At the end of a cycle, any filter value that matched no group or project is
 logged as a warning, so typos surface quickly. These warnings are per cycle
@@ -85,10 +93,14 @@ unmatched group filter suppresses the project warnings it would otherwise
 make meaningless.
 
 If a scope variable is set but contains no usable name — empty, or only
-whitespace and commas — the tool warns at startup and treats it as unset,
-meaning **no scope, i.e. the whole org**. This covers `-e VAR=` and a Compose
-`${VAR}` that interpolates to nothing, so a malformed value never silently
-narrows or widens the walk unnoticed.
+whitespace and commas — the tool treats it as unset, meaning **no scope, i.e.
+the whole org**. This is the one place scoping does not fail closed: it keeps
+the documented "unset = all" default rather than inventing a narrower one, so
+the walk widens instead of narrowing. It is never silent — the tool prints a
+warning to stderr at startup, before logging is configured, so it appears
+regardless of `LOG_LEVEL`. This covers `-e VAR=` and a Compose `${VAR}` that
+interpolates to nothing. Under `DRY_RUN=false`, treat that warning as a reason
+to stop the run.
 
 ## Usage
 
@@ -184,7 +196,7 @@ pip install -e ".[dev]"
 .venv/bin/ruff format --check .   # check formatting
 .venv/bin/ruff check --no-fix .   # lint
 .venv/bin/mypy src tests          # type check
-.venv/bin/pytest                  # run tests (187 tests, <1s)
+.venv/bin/pytest                  # run tests (197 tests, <1s)
 ```
 
 ### Project layout
