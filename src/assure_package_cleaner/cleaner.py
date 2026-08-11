@@ -52,9 +52,9 @@ class Cleaner:
             stats.errors += 1
             return stats
 
-        group_names = {
-            g["name"] for g in groups if isinstance(g, dict) and isinstance(g.get("name"), str)
-        }
+        # `groups` is iterated twice — here and in the loop below — so the client must keep
+        # returning a concrete list rather than a generator.
+        group_names = {name for g in groups if (name := _entry_name(g)) is not None}
         seen_projects: set[str] = set()
         projects_fully_listed = True
 
@@ -62,11 +62,8 @@ class Cleaner:
             if self._check_shutdown():
                 stats.interrupted = True
                 break
-            # A non-dict entry, a missing 'name', or a non-string name must all skip the
-            # entry rather than raise: an exception here aborts the cycle part-way through,
-            # after earlier groups have already had packages deleted.
-            group_name = group.get("name") if isinstance(group, dict) else None
-            if not isinstance(group_name, str):
+            group_name = _entry_name(group)
+            if group_name is None:
                 logger.warning("Malformed group entry: %r — skipping", group)
                 stats.errors += 1
                 continue
@@ -108,10 +105,9 @@ class Cleaner:
             if self._check_shutdown():
                 stats.interrupted = True
                 return True
-            try:
-                project_name = project["name"]
-            except KeyError:
-                logger.warning("Project entry missing 'name' key in group %s — skipping", group)
+            project_name = _entry_name(project)
+            if project_name is None:
+                logger.warning("Malformed project entry in group %s: %r — skipping", group, project)
                 stats.errors += 1
                 continue
             seen_projects.add(project_name)
@@ -148,11 +144,10 @@ class Cleaner:
             if self._check_shutdown():
                 stats.interrupted = True
                 return
-            try:
-                package_name = package["name"]
-            except KeyError:
+            package_name = _entry_name(package)
+            if package_name is None:
                 logger.warning(
-                    "Package entry missing 'name' key in %s/%s — skipping", group, project
+                    "Malformed package entry in %s/%s: %r — skipping", group, project, package
                 )
                 stats.errors += 1
                 continue
@@ -186,12 +181,12 @@ class Cleaner:
             if self._check_shutdown():
                 stats.interrupted = True
                 return
-            try:
-                version = version_info["version"]
-            except KeyError:
+            version = _entry_name(version_info, key="version")
+            if version is None:
                 logger.warning(
-                    "Version entry missing 'version' key in %s — skipping package (fail-safe)",
+                    "Malformed version entry in %s: %r — skipping package (fail-safe)",
                     pkg_path,
+                    version_info,
                 )
                 stats.errors += 1
                 return
@@ -270,6 +265,21 @@ class Cleaner:
 
         logger.info("DELETED %s (%d versions)", pkg_path, version_count)
         stats.deleted += 1
+
+
+def _entry_name(entry: object, key: str = "name") -> str | None:
+    """Pull a string name out of a listing entry, or None if the entry is malformed.
+
+    Every walk loop routes through this. A non-dict entry, a missing key, or a non-string
+    value must all skip the entry rather than raise — an exception mid-walk aborts the
+    cycle after earlier entries have already had their packages deleted. A non-string name
+    also has to be caught before it reaches a set operation or a scope check, both of which
+    raise on an unhashable value.
+    """
+    if not isinstance(entry, dict):
+        return None
+    value = entry.get(key)
+    return value if isinstance(value, str) else None
 
 
 def _extract_timestamp(status: dict) -> str | None:

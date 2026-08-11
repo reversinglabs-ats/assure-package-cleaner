@@ -662,6 +662,63 @@ class TestMissingKeys:
         assert stats.groups_processed == 1
         client.list_projects.assert_called_once_with("good-grp")
 
+    def test_non_string_project_name_does_not_abort_mid_walk(self):
+        """Regression: seen_projects.add() ran before the scope filter could skip the
+        entry, so an unhashable name aborted the cycle after real deletions."""
+        client = MagicMock()
+        client.list_groups.return_value = [{"name": "grp1"}, {"name": "grp2"}]
+        client.list_projects.side_effect = [
+            [{"name": "proj-a"}],
+            [{"name": ["not", "a", "string"]}, {"name": "proj-b"}],
+        ]
+        client.list_packages.return_value = []
+
+        cleaner = _make_cleaner(client=client, dry_run=False)
+        stats = cleaner.run_cycle()
+
+        assert stats.errors == 1
+        assert stats.projects_processed == 2  # proj-a and proj-b, the malformed one skipped
+        client.list_packages.assert_any_call("grp2", "proj-b")
+
+    def test_non_dict_project_entry_skipped(self):
+        client = MagicMock()
+        client.list_groups.return_value = [{"name": "grp"}]
+        client.list_projects.return_value = ["bogus", {"name": "proj"}]
+        client.list_packages.return_value = []
+
+        cleaner = _make_cleaner(client=client)
+        stats = cleaner.run_cycle()
+
+        assert stats.errors == 1
+        assert stats.projects_processed == 1
+
+    def test_non_dict_package_entry_skipped(self):
+        client = MagicMock()
+        client.list_groups.return_value = [{"name": "grp"}]
+        client.list_projects.return_value = [{"name": "proj"}]
+        client.list_packages.return_value = ["bogus", {"name": "pkg"}]
+        client.list_versions.return_value = []
+
+        cleaner = _make_cleaner(client=client)
+        stats = cleaner.run_cycle()
+
+        assert stats.errors == 1
+        assert stats.packages_evaluated == 1
+
+    def test_non_dict_version_entry_skips_package(self):
+        client = MagicMock()
+        client.list_groups.return_value = [{"name": "grp"}]
+        client.list_projects.return_value = [{"name": "proj"}]
+        client.list_packages.return_value = [{"name": "pkg"}]
+        client.list_versions.return_value = ["bogus"]
+
+        cleaner = _make_cleaner(client=client, dry_run=False)
+        stats = cleaner.run_cycle()
+
+        assert stats.errors == 1
+        assert stats.deleted == 0
+        client.delete_package.assert_not_called()
+
     def test_bad_item_does_not_block_good_items(self):
         """A malformed group entry should not prevent processing subsequent groups."""
         client = MagicMock()
@@ -1044,6 +1101,79 @@ class TestProjectScoping:
         assert stats.groups_processed == 1
         assert stats.projects_processed == 1
         client.list_packages.assert_called_once_with("grp1", "proj-b")
+
+    def test_nonmatching_project_filter_deletes_nothing(self):
+        """The mirror of the group-filter test: a deletable package behind an
+        out-of-scope project must never be reached, with dry_run off."""
+        client = MagicMock()
+        client.list_groups.return_value = [{"name": "grp"}]
+        client.list_projects.return_value = [{"name": "proj"}]
+        client.list_packages.return_value = [{"name": "pkg"}]
+        client.list_versions.return_value = [{"version": "1.0"}]
+        client.get_version_status.return_value = _status_response(_OLD_TIMESTAMP)
+
+        cleaner = _make_cleaner(client=client, dry_run=False, target_projects=frozenset({"other"}))
+        stats = cleaner.run_cycle()
+
+        assert stats.projects_processed == 0
+        assert stats.deleted == 0
+        client.list_packages.assert_not_called()
+        client.delete_package.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Scope matching semantics — exact, case-sensitive, never substring
+# ---------------------------------------------------------------------------
+
+
+class TestScopeMatchSemantics:
+    """The README makes exact matching the safety argument for scoping, so pin it.
+
+    A case test does not catch a substring mutation and vice versa, so both
+    directions are asserted for each filter.
+    """
+
+    def test_group_match_is_case_sensitive(self):
+        client = MagicMock()
+        client.list_groups.return_value = [{"name": "Platform"}]
+
+        cleaner = _make_cleaner(client=client, target_groups=frozenset({"platform"}))
+        stats = cleaner.run_cycle()
+
+        assert stats.groups_processed == 0
+        client.list_projects.assert_not_called()
+
+    def test_group_match_is_exact_not_substring(self):
+        client = MagicMock()
+        client.list_groups.return_value = [{"name": "prod-sandbox"}]
+
+        cleaner = _make_cleaner(client=client, target_groups=frozenset({"prod"}))
+        stats = cleaner.run_cycle()
+
+        assert stats.groups_processed == 0
+        client.list_projects.assert_not_called()
+
+    def test_project_match_is_case_sensitive(self):
+        client = MagicMock()
+        client.list_groups.return_value = [{"name": "grp"}]
+        client.list_projects.return_value = [{"name": "Api"}]
+
+        cleaner = _make_cleaner(client=client, target_projects=frozenset({"api"}))
+        stats = cleaner.run_cycle()
+
+        assert stats.projects_processed == 0
+        client.list_packages.assert_not_called()
+
+    def test_project_match_is_exact_not_substring(self):
+        client = MagicMock()
+        client.list_groups.return_value = [{"name": "grp"}]
+        client.list_projects.return_value = [{"name": "api-legacy"}, {"name": "internal-api"}]
+
+        cleaner = _make_cleaner(client=client, target_projects=frozenset({"api"}))
+        stats = cleaner.run_cycle()
+
+        assert stats.projects_processed == 0
+        client.list_packages.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
