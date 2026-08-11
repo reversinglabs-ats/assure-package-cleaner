@@ -76,14 +76,25 @@ never substring, and sensitive to whitespace and Unicode normalization on the
 API's side (the value you set is stripped, the API's name is not). So
 `SPECTRA_ASSURE_PROJECT=api` scopes to a project named exactly `api`, never to
 `api-legacy` or `internal-api`. A near-miss matches nothing and is reported as
-a typo: **once a filter is in effect it fails closed**, and nothing is deleted
-for a name that does not match. The one case that does not narrow is a
-variable that parses to no name at all, covered below.
+a typo: **a name that does not match deletes nothing**. Two cases below are the
+exceptions to that — a value that parses to no name at all, and a name
+containing a comma. Both widen the walk rather than narrowing it.
 
-A name containing a comma cannot be expressed — the list is split on `,` with
-no escape. Such a group or project can only be reached by leaving the variable
-unset and letting the walk cover it, and the only symptom is a "matched no
-group" warning for each half of the split name.
+**A name containing a comma cannot be expressed, and the failure is silent.**
+The list is split on `,` with no escape, and the split cannot be told apart
+from an ordinary two-name list. If the halves happen to be real names, the walk
+**widens into groups you never named** — with no warning, because every parsed
+name matched something:
+
+```
+SPECTRA_ASSURE_GROUP="a,b"   # meaning the single group literally named "a,b"
+parsed scope -> a, b         # walks and deletes in groups `a` and `b`
+                             # the group `a,b` is never touched
+```
+
+This is the one case where a filter that is in effect does not fail closed. Such
+a group or project can only be reached by leaving the variable unset and letting
+the walk cover it.
 
 At the end of a cycle, any filter value that matched no group or project is
 logged as a warning, so typos surface quickly. These warnings are per cycle
@@ -94,9 +105,9 @@ make meaningless.
 
 If a scope variable is set but contains no usable name — empty, or only
 whitespace and commas — the tool treats it as unset, meaning **no scope, i.e.
-the whole org**. This is the one place scoping does not fail closed: it keeps
-the documented "unset = all" default rather than inventing a narrower one, so
-the walk widens instead of narrowing. It is never silent — the tool prints a
+the whole org**. It keeps the documented "unset = all" default rather than
+inventing a narrower one, so the walk widens instead of narrowing. Unlike the
+comma case above, it is never silent — the tool prints a
 warning to stderr at startup, before logging is configured, so it appears
 regardless of `LOG_LEVEL`. This covers `-e VAR=` and a Compose `${VAR}` that
 interpolates to nothing. Under `DRY_RUN=false`, treat that warning as a reason
@@ -196,7 +207,7 @@ pip install -e ".[dev]"
 .venv/bin/ruff format --check .   # check formatting
 .venv/bin/ruff check --no-fix .   # lint
 .venv/bin/mypy src tests          # type check
-.venv/bin/pytest                  # run tests (203 tests, <1s)
+.venv/bin/pytest                  # run tests (207 tests, <1s)
 ```
 
 ### Project layout
