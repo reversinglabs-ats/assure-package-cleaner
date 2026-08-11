@@ -27,6 +27,11 @@ assure-package-cleaner = "assure_package_cleaner.__main__:main"
 target-version = "py312"
 line-length = 100
 src = ["src", "tests"]
+# The explicit `select` below pins which lint rules run, but not which files the
+# *formatter* walks. 0.16 began formatting Python blocks inside Markdown, so
+# `ruff format --check .` covered 9 files on 0.15.22 and 11 on 0.16.2 — and CI floats
+# to whatever pip resolves. Excluding Markdown keeps that surface fixed too.
+extend-exclude = ["*.md"]
 
 [tool.ruff.format]
 quote-style = "double"
