@@ -157,7 +157,7 @@ def _parse_csv_set(name: str) -> frozenset[str]:
         # pipeline. Print to stderr like the ConfigError handler in __main__ instead —
         # that also keeps the warning unconditional, where routing it through the root
         # logger would let LOG_LEVEL=ERROR silence the one signal that scope widened.
-        print(  # noqa: T201
+        print(
             f"WARNING: {name} is set but contains no usable names — "
             "treating as no scope (all). Check for stray whitespace or commas.",
             file=sys.stderr,
