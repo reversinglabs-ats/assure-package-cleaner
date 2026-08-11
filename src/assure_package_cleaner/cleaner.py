@@ -153,9 +153,15 @@ class Cleaner:
             stats.errors += 1
             return
 
-        # Unlike groups and projects, this listing is iterated in memory with no re-list
-        # between deletes, so a repeat is a second DELETE of something already gone — a
-        # redundant destructive attempt that 404s into `errors`.
+        # Per project, not per group or per cycle: the same package name in a different
+        # project is a different package and must still be evaluated.
+        #
+        # In dry-run — the default — a duplicate at any level double-counts `deleted`, and
+        # that report is what an operator reads to decide whether to set DRY_RUN=false.
+        # Under DRY_RUN=false the levels diverge: groups and projects re-list from the API
+        # between passes, so the cost there is wasted requests and inflated counters, while
+        # this listing is iterated in memory with no re-list, making a repeat a genuine
+        # second DELETE of something already gone that 404s into `errors`.
         walked_packages: set[str] = set()
 
         for package in packages:
@@ -204,6 +210,7 @@ class Cleaner:
             return
 
         all_stale = True
+        walked_versions: set[str] = set()
         for version_info in versions:
             if self._check_shutdown():
                 stats.interrupted = True
@@ -217,6 +224,14 @@ class Cleaner:
                 )
                 stats.errors += 1
                 return
+            if version in walked_versions:
+                # Cheaper than the other levels — a wasted /status/ call — but an ungated
+                # repeat also inflates the version count in the DELETED log line.
+                logger.warning(
+                    "Duplicate version entry %s@%s — already seen, skipping", pkg_path, version
+                )
+                continue
+            walked_versions.add(version)
             try:
                 status = self.client.get_version_status(group, project, package, version)
             except APIError:
@@ -264,7 +279,7 @@ class Cleaner:
             if self._check_shutdown():
                 stats.interrupted = True
                 return
-            self._delete_package(group, project, package, len(versions), stats)
+            self._delete_package(group, project, package, len(walked_versions), stats)
         else:
             stats.skipped += 1
 

@@ -17,7 +17,7 @@ A Python CLI/Docker tool that automatically deletes stale packages from the Reve
 # Type check
 .venv/bin/mypy src tests
 
-# Run tests (207 tests, should complete in <1s)
+# Run tests (212 tests, should complete in <1s)
 .venv/bin/pytest
 
 # Run the app locally (requires env vars — see below)
@@ -38,7 +38,7 @@ src/assure_package_cleaner/
 tests/
   test_config.py     # 75 tests — env var parsing, validation, defaults, scoping
   test_client.py     # 43 tests — API methods, errors, auth, delay
-  test_cleaner.py    # 82 tests — staleness logic, short-circuit, fail-safe, dry-run, scoping
+  test_cleaner.py    # 87 tests — staleness logic, short-circuit, fail-safe, dry-run, scoping
   test_main.py       # 7 tests  — config → cleaner/client wiring (dry_run and scope must survive it)
 Dockerfile           # Multi-stage Chainguard build
 ```
@@ -101,6 +101,8 @@ No pagination. Auth is `Authorization: Bearer <token>`.
 - The `pkg:rl/` prefix in URL paths is literal and required by the API.
 - Token masking in `config.py` assumes the token is at least 8 characters (shows first 4 + last 4).
 - Every listing entry goes through `_entry_name()` in `cleaner.py`. A malformed entry must **skip**, never raise — an exception mid-walk aborts the cycle after earlier packages have already been deleted. It rejects non-dicts, missing keys, non-string values, and blank names (which would build a URL with an empty path segment).
-- Duplicate entries are skipped at the group, project, and package levels, but the cost differs. Groups and projects re-list from the API on each pass, so a repeat there costs wasted requests and inflated `projects_processed` — measure this against a stateful fake, not a `MagicMock`, whose `return_value` hands back the same list forever and makes it look like a double deletion. A package listing is iterated in memory with no re-list between deletes, so a repeat there is a genuine second DELETE of something already gone, 404ing into `errors`. Duplicate versions cost one extra `/status/` call and nothing else.
-- The project de-dupe is per group, never global — the same project name legitimately appears in many groups (`test_project_filter_spans_all_groups`).
+- Duplicate entries are skipped at all four levels, and the cost depends on `DRY_RUN`. **In dry-run — the default — a duplicate at any level double-counts `deleted`, identically.** That matters most: the dry-run report is what an operator reads to decide whether to set `DRY_RUN=false`. Only under `DRY_RUN=false` do the levels diverge, because `_delete_package` returns before touching the API in dry-run and the package therefore never disappears. There: groups and projects re-list between passes, so a repeat costs wasted requests and inflated `groups_processed` / `projects_processed` / `packages_evaluated`; a package listing is iterated in memory with no re-list, so a repeat is a genuine second DELETE of something already gone, 404ing into `errors`; a duplicate version costs one extra `/status/` call and would inflate the version count in the DELETED log line.
+- When measuring any of this, use a **stateful fake** where a deleted package actually disappears, and run **both** `DRY_RUN` modes. A `MagicMock`'s `return_value` hands back the same list forever, which models dry-run faithfully but not live deletion.
+- The de-dupe gates are scoped one level up: projects per group, packages per project, versions per package. Never global — the same project name legitimately appears in many groups, and the same package name in many projects. Both are pinned (`test_same_project_name_in_two_groups_is_not_deduped`, `test_same_package_name_in_two_projects_is_not_deduped`).
+- Each gate sits **above** its scope filter so a misbehaving server's duplicates surface even for entries that would not be walked, and each one warns without touching `errors` — nothing failed to be evaluated. Both choices are pinned by tests.
 - `tests/test_main.py` exists because `__main__` is where `DRY_RUN` and the scope filters meet the `Cleaner`. A wiring slip there is the one class of bug that **over**-deletes, and type checking can't catch it — `target_groups`/`target_projects` are both `frozenset[str]`. Assert kwargs there, not just in `test_config.py`.

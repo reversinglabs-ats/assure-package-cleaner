@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import threading
 from datetime import UTC, datetime, timedelta
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 from assure_package_cleaner.cleaner import Cleaner, CycleStats, _extract_timestamp, _parse_timestamp
 from assure_package_cleaner.client import APIError
@@ -711,8 +711,9 @@ class TestMissingKeys:
         client.list_packages.assert_called_once_with("grp", "proj")
 
     def test_duplicate_project_is_walked_once(self):
-        """Groups and projects re-list from the API on each pass, so a duplicate costs
-        wasted requests and an inflated projects_processed — not a second DELETE."""
+        """Under DRY_RUN=false projects re-list from the API on each pass, so a duplicate
+        costs wasted requests and an inflated projects_processed, not a second DELETE. In
+        dry-run it double-counts `deleted` like every other level."""
         client = MagicMock()
         client.list_groups.return_value = [{"name": "grp"}]
         client.list_projects.return_value = [{"name": "proj"}, {"name": "proj"}]
@@ -724,9 +725,90 @@ class TestMissingKeys:
         assert stats.projects_processed == 1
         client.list_packages.assert_called_once_with("grp", "proj")
 
+    def test_duplicate_group_warns_even_when_out_of_scope(self, caplog):
+        """The dedupe check sits above the scope filter on purpose — a misbehaving server's
+        duplicates are worth surfacing even for entries we would not walk."""
+        client = MagicMock()
+        client.list_groups.return_value = [{"name": "out"}, {"name": "out"}, {"name": "in"}]
+        client.list_projects.return_value = []
+
+        cleaner = _make_cleaner(client=client, target_groups=frozenset({"in"}))
+        with caplog.at_level("WARNING"):
+            cleaner.run_cycle()
+
+        assert any("Duplicate group entry 'out'" in r.message for r in caplog.records)
+        client.list_projects.assert_called_once_with("in")
+
+    def test_duplicate_project_warns_even_when_out_of_scope(self, caplog):
+        client = MagicMock()
+        client.list_groups.return_value = [{"name": "grp"}]
+        client.list_projects.return_value = [{"name": "out"}, {"name": "out"}, {"name": "in"}]
+        client.list_packages.return_value = []
+
+        cleaner = _make_cleaner(client=client, target_projects=frozenset({"in"}))
+        with caplog.at_level("WARNING"):
+            cleaner.run_cycle()
+
+        assert any("Duplicate project entry grp/out" in r.message for r in caplog.records)
+        client.list_packages.assert_called_once_with("grp", "in")
+
+    def test_same_package_name_in_two_projects_is_not_deduped(self):
+        """The package gate is per project — hoisting it to per-group or per-cycle would
+        silently under-delete and blame the API for a duplicate it never returned."""
+        client = MagicMock()
+        client.list_groups.return_value = [{"name": "grp"}]
+        client.list_projects.return_value = [{"name": "proj-a"}, {"name": "proj-b"}]
+        client.list_packages.return_value = [{"name": "pkg"}]
+        client.list_versions.return_value = [{"version": "1.0"}]
+        client.get_version_status.return_value = _status_response(_OLD_TIMESTAMP)
+
+        cleaner = _make_cleaner(client=client, dry_run=False)
+        stats = cleaner.run_cycle()
+
+        assert stats.deleted == 2
+        assert client.delete_package.call_args_list == [
+            call("grp", "proj-a", "pkg"),
+            call("grp", "proj-b", "pkg"),
+        ]
+
+    def test_duplicate_entries_warn_without_counting_an_error(self, caplog):
+        """Duplicates are log-only by design: nothing failed to be evaluated, so `errors`
+        stays clean. Pinned because it is the summary line alerting keys off."""
+        client = MagicMock()
+        client.list_groups.return_value = [{"name": "grp"}, {"name": "grp"}]
+        client.list_projects.return_value = [{"name": "proj"}, {"name": "proj"}]
+        client.list_packages.return_value = [{"name": "pkg"}, {"name": "pkg"}]
+        client.list_versions.return_value = [{"version": "1.0"}, {"version": "1.0"}]
+        client.get_version_status.return_value = _status_response(_OLD_TIMESTAMP)
+
+        cleaner = _make_cleaner(client=client, dry_run=False)
+        with caplog.at_level("WARNING"):
+            stats = cleaner.run_cycle()
+
+        assert stats.errors == 0
+        assert stats.deleted == 1
+        assert sum("already seen" in r.message for r in caplog.records) == 4
+
+    def test_duplicate_version_does_not_inflate_the_logged_count(self, caplog):
+        """len(versions) would report `(2 versions)` for one real version, and that log
+        line is what an operator reads back."""
+        client = MagicMock()
+        client.list_groups.return_value = [{"name": "grp"}]
+        client.list_projects.return_value = [{"name": "proj"}]
+        client.list_packages.return_value = [{"name": "pkg"}]
+        client.list_versions.return_value = [{"version": "1.0"}, {"version": "1.0"}]
+        client.get_version_status.return_value = _status_response(_OLD_TIMESTAMP)
+
+        cleaner = _make_cleaner(client=client, dry_run=True)
+        with caplog.at_level("INFO"):
+            cleaner.run_cycle()
+
+        assert client.get_version_status.call_count == 1
+        assert any("WOULD DELETE grp/proj/pkg (1 versions)" in r.message for r in caplog.records)
+
     def test_duplicate_package_is_evaluated_once(self):
-        """A package listing is iterated in memory with no re-list between deletes, so a
-        repeat is a second DELETE of something already gone — a real 404 into errors."""
+        """A package listing is iterated in memory with no re-list between deletes, so
+        under DRY_RUN=false a repeat is a second DELETE of something already gone."""
         client = MagicMock()
         client.list_groups.return_value = [{"name": "grp"}]
         client.list_projects.return_value = [{"name": "proj"}]
@@ -756,8 +838,9 @@ class TestMissingKeys:
         assert client.list_packages.call_count == 2
 
     def test_duplicate_group_is_walked_once(self):
-        """A repeated group would evaluate its packages twice, inflating `deleted` and
-        turning the second DELETE into a 404 counted as an error."""
+        """In dry-run — the default — a repeat double-counts `deleted`. Under
+        DRY_RUN=false groups re-list, so there it costs wasted requests and inflated
+        groups_processed / packages_evaluated rather than a second DELETE."""
         client = MagicMock()
         client.list_groups.return_value = [{"name": "dup"}, {"name": "dup"}]
         client.list_projects.return_value = [{"name": "proj"}]
