@@ -680,6 +680,37 @@ class TestMissingKeys:
         assert stats.projects_processed == 2  # proj-a and proj-b, the malformed one skipped
         client.list_packages.assert_any_call("grp2", "proj-b")
 
+    def test_blank_group_name_skipped(self):
+        """An empty or whitespace-only name would build a URL with an empty path segment."""
+        client = MagicMock()
+        client.list_groups.return_value = [{"name": ""}, {"name": "   "}, {"name": "grp"}]
+        client.list_projects.return_value = []
+
+        cleaner = _make_cleaner(client=client)
+        stats = cleaner.run_cycle()
+
+        assert stats.errors == 2
+        assert stats.groups_processed == 1
+        client.list_projects.assert_called_once_with("grp")
+
+    def test_duplicate_group_is_walked_once(self):
+        """A repeated group would evaluate its packages twice, inflating `deleted` and
+        turning the second DELETE into a 404 counted as an error."""
+        client = MagicMock()
+        client.list_groups.return_value = [{"name": "dup"}, {"name": "dup"}]
+        client.list_projects.return_value = [{"name": "proj"}]
+        client.list_packages.return_value = [{"name": "pkg"}]
+        client.list_versions.return_value = [{"version": "1.0"}]
+        client.get_version_status.return_value = _status_response(_OLD_TIMESTAMP)
+
+        cleaner = _make_cleaner(client=client, dry_run=False)
+        stats = cleaner.run_cycle()
+
+        assert stats.groups_processed == 1
+        assert stats.packages_evaluated == 1
+        assert stats.deleted == 1
+        client.delete_package.assert_called_once_with("dup", "proj", "pkg")
+
     def test_non_dict_project_entry_skipped(self):
         client = MagicMock()
         client.list_groups.return_value = [{"name": "grp"}]

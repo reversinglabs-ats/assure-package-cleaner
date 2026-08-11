@@ -56,6 +56,7 @@ class Cleaner:
         # returning a concrete list rather than a generator.
         group_names = {name for g in groups if (name := _entry_name(g)) is not None}
         seen_projects: set[str] = set()
+        walked_groups: set[str] = set()
         projects_fully_listed = True
 
         for group in groups:
@@ -67,6 +68,12 @@ class Cleaner:
                 logger.warning("Malformed group entry: %r — skipping", group)
                 stats.errors += 1
                 continue
+            if group_name in walked_groups:
+                # Walking a repeated group would evaluate its packages twice, inflating
+                # `deleted` and turning the second DELETE into a 404 counted as an error.
+                logger.warning("Duplicate group entry %r — already walked, skipping", group_name)
+                continue
+            walked_groups.add(group_name)
             if self.target_groups and group_name not in self.target_groups:
                 logger.debug("Group %s not in scope — skipping", group_name)
                 continue
@@ -279,7 +286,12 @@ def _entry_name(entry: object, key: str = "name") -> str | None:
     if not isinstance(entry, dict):
         return None
     value = entry.get(key)
-    return value if isinstance(value, str) else None
+    if not isinstance(value, str) or not value.strip():
+        return None
+    # Returned unstripped: matching is exact against what the API reports, and the name
+    # goes into a URL path as-is. Only a wholly blank name is rejected, since that would
+    # build a path with an empty segment.
+    return value
 
 
 def _extract_timestamp(status: dict) -> str | None:
