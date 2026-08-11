@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-from assure_package_cleaner.__main__ import main
+from assure_package_cleaner.__main__ import _shutdown, main
 
 _ENV = {
     "SPECTRA_ASSURE_BASE_URL": "https://my.secure.software/acme-corp",
@@ -30,6 +30,9 @@ def _run_main(env: dict[str, str]) -> MagicMock:
             patch("assure_package_cleaner.__main__.SpectraClient"),
             patch("assure_package_cleaner.__main__.Cleaner") as cleaner_cls,
             patch("assure_package_cleaner.__main__.signal.signal"),
+            # main() calls basicConfig, which installs a root handler and sets the root
+            # level for the rest of the session. Keep that out of the other tests.
+            patch("assure_package_cleaner.__main__.logging.basicConfig"),
         ):
             main()
     return cleaner_cls
@@ -51,6 +54,43 @@ class TestMainWiring:
         kwargs = cleaner_cls.call_args.kwargs
         assert kwargs["target_groups"] == frozenset({"grp-a", "grp-b"})
         assert kwargs["target_projects"] == frozenset()
+
+    def test_dry_run_default_reaches_the_cleaner(self):
+        """DRY_RUN's default must survive the wiring — hardcoding dry_run=False here
+        would turn every run into a live deletion run."""
+        env = {k: v for k, v in _ENV.items() if k != "DRY_RUN"}
+        cleaner_cls = _run_main(env)
+
+        assert cleaner_cls.call_args.kwargs["dry_run"] is True
+
+    def test_dry_run_false_reaches_the_cleaner(self):
+        cleaner_cls = _run_main({**_ENV, "DRY_RUN": "false"})
+
+        assert cleaner_cls.call_args.kwargs["dry_run"] is False
+
+    def test_threshold_and_shutdown_are_wired(self):
+        cleaner_cls = _run_main({**_ENV, "STALE_THRESHOLD_DAYS": "42"})
+
+        kwargs = cleaner_cls.call_args.kwargs
+        assert kwargs["stale_threshold_days"] == 42
+        # The signal handlers set this exact event; a fresh one would ignore SIGTERM.
+        assert kwargs["shutdown"] is _shutdown
+
+    def test_client_gets_the_parsed_url_org_and_delay(self):
+        with patch.dict("os.environ", {**_ENV, "REQUEST_DELAY_SECONDS": "2.5"}, clear=True):
+            with (
+                patch("assure_package_cleaner.__main__.SpectraClient") as client_cls,
+                patch("assure_package_cleaner.__main__.Cleaner"),
+                patch("assure_package_cleaner.__main__.signal.signal"),
+                patch("assure_package_cleaner.__main__.logging.basicConfig"),
+            ):
+                main()
+
+        kwargs = client_cls.call_args.kwargs
+        assert kwargs["base_url"] == "https://my.secure.software/api/public/v1"
+        assert kwargs["org"] == "acme-corp"
+        assert kwargs["api_token"] == "tok_1234567890abcdef"
+        assert kwargs["request_delay"] == 2.5
 
     def test_single_run_mode_runs_one_cycle(self):
         cleaner_cls = _run_main(_ENV)
