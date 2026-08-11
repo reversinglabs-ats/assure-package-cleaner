@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import io
+import logging
 from unittest.mock import patch
 
 import pytest
@@ -538,12 +540,32 @@ class TestScopingConfig:
             Config.from_env()
         assert "no usable names" not in capsys.readouterr().err
 
-    def test_warning_is_emitted_even_when_log_level_silences_logging(self, capsys):
-        """The warning must survive LOG_LEVEL=ERROR — it is the only signal that
-        a malformed scope var widened the walk to the whole org."""
-        with patch.dict("os.environ", _env(SPECTRA_ASSURE_GROUP="", LOG_LEVEL="ERROR"), clear=True):
-            Config.from_env()
-        assert "no usable names" in capsys.readouterr().err
+    def test_warning_survives_logging_being_silenced(self, capsys):
+        """The warning must not be suppressible by logging config — it is the only
+        signal that a malformed scope var widened the walk to the whole org.
+
+        Setting LOG_LEVEL would prove nothing here: from_env() only parses it into a
+        string, and basicConfig runs later in main(). Silence logging for real instead.
+        """
+        root = logging.getLogger()
+        handler = logging.StreamHandler(io.StringIO())
+        root.addHandler(handler)
+        original_level = root.level
+        root.setLevel(logging.ERROR)
+        logging.disable(logging.CRITICAL)
+        try:
+            with patch.dict("os.environ", _env(SPECTRA_ASSURE_GROUP=""), clear=True):
+                Config.from_env()
+        finally:
+            logging.disable(logging.NOTSET)
+            root.setLevel(original_level)
+            root.removeHandler(handler)
+
+        captured = capsys.readouterr()
+        assert "no usable names" in captured.err
+        assert captured.out == ""
+        # Nothing reached the logging machinery, so nothing could have filtered it.
+        assert handler.stream.getvalue() == ""
 
     def test_project_comma_list(self):
         with patch.dict("os.environ", _env(SPECTRA_ASSURE_PROJECT="p1,p2"), clear=True):
