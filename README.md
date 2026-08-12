@@ -106,8 +106,19 @@ A failed or partly unreadable *project* listing suppresses only the project
 warnings; the group warnings still fire, correctly. So does an unmatched group
 filter, which would otherwise make every project warning meaningless.
 
-An absent warning therefore means either "matched" or "could not tell" — and the
-error count in the same cycle summary line distinguishes them.
+An absent warning therefore means "matched" *or* "could not tell", and the two
+are not always distinguishable from the summary line. A group typo plus a
+project typo reports only the group one, with `errors=0`; an interrupted cycle
+reports neither, also with `errors=0`. What tells them apart is the status word
+(`Cycle interrupted`), the presence of a group warning, and the error count
+together — not the error count alone.
+
+Note also that an unmatched group filter suppresses the project warnings for
+*every* group, including ones that were fully enumerated. With groups
+`{team-a, tema-b}` and project `biling`, only the group typo is reported, even
+though `team-a`'s projects were listed and `biling` genuinely matched nothing in
+them. Fix reported typos one at a time and re-run; a clean cycle is the only
+reliable all-clear.
 
 If a scope variable is set but contains no usable name — empty, or only
 whitespace and commas — the tool treats it as unset, meaning **no scope, i.e.
@@ -177,7 +188,9 @@ docker run --rm \
   assure-package-cleaner
 ```
 
-The container handles `SIGTERM` and `SIGINT` gracefully — it will finish the current operation and then exit cleanly. This means `docker stop` works without forcing a kill.
+The container handles `SIGTERM` and `SIGINT` gracefully — it finishes the current operation and then exits cleanly, and it never abandons a package half-evaluated.
+
+One case is slower than `docker stop`'s default 10-second grace period: the signal handler only sets a flag, which is checked between operations, so a shutdown that arrives while the client is sleeping off a rate-limit (429) backoff is not noticed until that sleep ends. With three retries at the 60-second default that is up to 180 seconds, and Docker will `SIGKILL` first. That is safe — a kill mid-walk cannot leave a package partly deleted, since deletion is a single API call — but if you stop the container during a rate-limit storm, either pass `docker stop -t 200` or expect the kill. Tracked in [#19](https://github.com/reversinglabs-ats/assure-package-cleaner/issues/19).
 
 ### Running directly (without Docker)
 
@@ -213,7 +226,7 @@ pip install -e ".[dev]"
 .venv/bin/ruff format --check .   # check formatting
 .venv/bin/ruff check --no-fix .   # lint
 .venv/bin/mypy src tests          # type check
-.venv/bin/pytest                  # run tests (217 tests, <1s)
+.venv/bin/pytest                  # run tests (233 tests, <1s)
 ```
 
 ### Project layout
