@@ -576,6 +576,37 @@ class TestScopingConfig:
             "SPECTRA_ASSURE_PROJECT is set but contains no usable names" in capsys.readouterr().err
         )
 
+    @pytest.mark.parametrize("var", ["SPECTRA_ASSURE_GROUP", "SPECTRA_ASSURE_PROJECT"])
+    @pytest.mark.parametrize("raw", ["", " , , ", "   "])
+    def test_set_but_empty_is_fatal_under_dry_run_false(self, var, raw):
+        """The warning above is the right call in dry-run, where the cost is a misleading
+        report. Under DRY_RUN=false the same value turns a scoped run into a live
+        org-wide deletion the operator never asked for — from a variable whose whole
+        purpose was to narrow it. README already said to stop the run on this warning.
+
+        Breaking on upgrade is the point: the alternative is deleting the whole org.
+        """
+        env = _env(DRY_RUN="false")
+        env[var] = raw
+        with patch.dict("os.environ", env, clear=True):
+            with pytest.raises(ConfigError, match="contains no usable names"):
+                Config.from_env()
+
+    @pytest.mark.parametrize("var", ["SPECTRA_ASSURE_GROUP", "SPECTRA_ASSURE_PROJECT"])
+    def test_unset_is_still_fine_under_dry_run_false(self, var):
+        """Unset still means the whole org — the documented default, and the only way to
+        clean org-wide on purpose. Only set-but-empty is the ambiguous case."""
+        with patch.dict("os.environ", _env(DRY_RUN="false"), clear=True):
+            cfg = Config.from_env()
+        assert cfg.target_groups == frozenset()
+        assert cfg.target_projects == frozenset()
+
+    def test_a_usable_value_is_unaffected_under_dry_run_false(self):
+        with patch.dict(
+            "os.environ", _env(DRY_RUN="false", SPECTRA_ASSURE_GROUP="grp-a"), clear=True
+        ):
+            assert Config.from_env().target_groups == frozenset({"grp-a"})
+
     def test_group_and_project_are_not_transposed(self):
         with patch.dict(
             "os.environ",

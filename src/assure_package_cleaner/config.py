@@ -70,10 +70,10 @@ class Config:
         # from __main__ *after* the config gate — a traceback instead of the clean
         # "Configuration error:" + exit 1 every other bad value gets, and a crashloop
         # under a Docker restart policy.
-        # Set-but-empty means unset, as it does for the scope variables: `-e LOG_LEVEL=`
-        # and a Compose `${LOG_LEVEL}` that interpolates to nothing must not stop the
-        # container. Unlike the scope vars this needs no warning — the default is not a
-        # widening of what gets deleted.
+        # Set-but-empty means unset: `-e LOG_LEVEL=` and a Compose `${LOG_LEVEL}` that
+        # interpolates to nothing must not stop the container. Silently, unlike the scope
+        # variables — falling back to INFO cannot widen what gets deleted, so there is
+        # nothing to warn about.
         log_level = os.environ.get("LOG_LEVEL", "").strip().upper() or "INFO"
         if log_level not in _VALID_LOG_LEVELS:
             raise ConfigError(
@@ -83,8 +83,8 @@ class Config:
         dry_run_raw = os.environ.get("DRY_RUN", "true").strip().lower()
         dry_run = dry_run_raw not in ("false", "0", "no")
 
-        target_groups = _parse_csv_set("SPECTRA_ASSURE_GROUP")
-        target_projects = _parse_csv_set("SPECTRA_ASSURE_PROJECT")
+        target_groups = _parse_csv_set("SPECTRA_ASSURE_GROUP", dry_run=dry_run)
+        target_projects = _parse_csv_set("SPECTRA_ASSURE_PROJECT", dry_run=dry_run)
 
         return cls(
             base_url=base_url,
@@ -216,10 +216,24 @@ def _parse_float(name: str, default: float, *, minimum: float, maximum: float) -
     return value
 
 
-def _parse_csv_set(name: str) -> frozenset[str]:
-    """Parse a comma-separated env var into a set of stripped, non-empty values."""
+def _parse_csv_set(name: str, *, dry_run: bool) -> frozenset[str]:
+    """Parse a comma-separated env var into a set of stripped, non-empty values.
+
+    Set-but-empty keeps meaning "no scope, i.e. the whole org" — the documented
+    unset-means-all default, which widens rather than narrows. Under DRY_RUN=false that
+    widening is a live org-wide deletion the operator did not ask for, from a value that
+    was meant to narrow it, so there it is a hard error instead of a warning. README
+    already told operators to stop the run on this warning; this enforces it.
+    """
     raw = os.environ.get(name)
     result = frozenset(item.strip() for item in (raw or "").split(",") if item.strip())
+    if raw is not None and not result and not dry_run:
+        raise ConfigError(
+            f"{name} is set but contains no usable names, which would widen the walk to "
+            "the whole organization — and DRY_RUN=false means that deletes. Either unset "
+            f"{name} to intentionally clean the whole org, or fix the value. Check for "
+            "stray whitespace or commas."
+        )
     if raw is not None and not result:
         # from_env() runs before logging is configured, so a logger call here would go out
         # through logging.lastResort: unformatted, and invisible to a structured-log
