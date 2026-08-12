@@ -54,6 +54,7 @@ class Cleaner:
 
         seen_projects: set[str] = set()
         walked_groups: set[str] = set()
+        groups_fully_listed = True
         projects_fully_listed = True
 
         for group in groups:
@@ -64,6 +65,7 @@ class Cleaner:
             if group_name is None:
                 logger.warning("Malformed group entry: %r — skipping", group)
                 stats.errors += 1
+                groups_fully_listed = False
                 continue
             # Checked above the scope filter on purpose: a misbehaving server's duplicates
             # are worth surfacing even for groups we would not walk.
@@ -79,7 +81,9 @@ class Cleaner:
                 projects_fully_listed = False
 
         if not stats.interrupted:
-            self._warn_unmatched(walked_groups, seen_projects, projects_fully_listed)
+            self._warn_unmatched(
+                walked_groups, seen_projects, groups_fully_listed, projects_fully_listed
+            )
 
         status = "Cycle interrupted" if stats.interrupted else "Cycle complete"
         logger.info(
@@ -97,7 +101,7 @@ class Cleaner:
     def _process_group(
         self, group: str, cutoff: datetime, stats: CycleStats, seen_projects: set[str]
     ) -> bool:
-        """Walk a group's projects. Returns False if the project listing failed."""
+        """Walk a group's projects. Returns False if the projects were not fully enumerated."""
         try:
             projects = self.client.list_projects(group)
         except APIError:
@@ -107,6 +111,7 @@ class Cleaner:
 
         # Per group, not global: the same project name legitimately appears in many groups.
         walked_projects: set[str] = set()
+        fully_listed = True
 
         for project in projects:
             if self._check_shutdown():
@@ -116,6 +121,7 @@ class Cleaner:
             if project_name is None:
                 logger.warning("Malformed project entry in group %s: %r — skipping", group, project)
                 stats.errors += 1
+                fully_listed = False
                 continue
             if project_name in walked_projects:
                 logger.warning(
@@ -129,11 +135,20 @@ class Cleaner:
                 continue
             stats.projects_processed += 1
             self._process_project(group, project_name, cutoff, stats)
-        return True
+        return fully_listed
 
     def _warn_unmatched(
-        self, group_names: set[str], seen_projects: set[str], projects_fully_listed: bool
+        self,
+        group_names: set[str],
+        seen_projects: set[str],
+        groups_fully_listed: bool,
+        projects_fully_listed: bool,
     ) -> None:
+        # A group entry we could not read might have been the one a filter names, so it
+        # makes both levels look unmatched — that group's projects were never listed
+        # either. Same epistemic situation as a listing that failed outright.
+        if not groups_fully_listed:
+            return
         unmatched_groups = self.target_groups - group_names
         for group in sorted(unmatched_groups):
             logger.warning("Group filter %r matched no group in the org", group)
@@ -225,12 +240,12 @@ class Cleaner:
                 stats.errors += 1
                 return
             if version in walked_versions:
-                # Cheaper than the other levels — a wasted /status/ call — but an ungated
-                # repeat also inflates the version count in the DELETED log line.
-                logger.warning(
-                    "Duplicate version entry %s@%s — already seen, skipping", pkg_path, version
-                )
-                continue
+                # Warned and counted once for the DELETED log line, but deliberately NOT
+                # skipped: if a misbehaving server reports the same version twice with
+                # divergent statuses, the repeat must keep its power to veto the delete.
+                # One redundant /status/ call is cheaper than deleting on a half-read
+                # package — every other doubt in this walk skips, and so does this one.
+                logger.warning("Duplicate version entry %s@%s — already seen", pkg_path, version)
             walked_versions.add(version)
             try:
                 status = self.client.get_version_status(group, project, package, version)

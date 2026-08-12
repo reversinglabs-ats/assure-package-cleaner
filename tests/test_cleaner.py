@@ -20,7 +20,7 @@ _FRESH_TIMESTAMP = (datetime.now(UTC) - timedelta(hours=1)).isoformat()
 
 
 def _make_cleaner(
-    client: MagicMock | None = None,
+    client: MagicMock | _StatefulPortal | None = None,
     stale_threshold_days: int = 30,
     dry_run: bool = True,
     shutdown: threading.Event | None = None,
@@ -43,6 +43,60 @@ def _make_cleaner(
 
 def _status_response(timestamp: str) -> dict:
     return {"analysis": {"timestamp": timestamp}}
+
+
+class _StatefulPortal:
+    """A fake portal where a deleted package actually disappears.
+
+    A MagicMock's return_value hands back the same listing forever. That models dry-run
+    faithfully, but under DRY_RUN=false it hides what a second visit to an already-deleted
+    package really costs — the 404 lands at list_versions, before DELETE is ever reached.
+    Every version it reports is stale, so anything reachable is deletable.
+    """
+
+    def __init__(
+        self,
+        tree: dict[str, dict[str, dict[str, list[str]]]],
+        *,
+        duplicate_packages: bool = False,
+    ) -> None:
+        self.tree = tree
+        self.duplicate_packages = duplicate_packages
+        self.delete_calls: list[tuple[str, str, str]] = []
+
+    def _packages(self, group: str, project: str) -> dict[str, list[str]]:
+        try:
+            return self.tree[group][project]
+        except KeyError:
+            raise APIError("GET", f"/list/{group}/{project}", 404, "not found") from None
+
+    def list_groups(self) -> list[dict]:
+        return [{"name": name} for name in self.tree]
+
+    def list_projects(self, group: str) -> list[dict]:
+        return [{"name": name} for name in self.tree[group]]
+
+    def list_packages(self, group: str, project: str) -> list[dict]:
+        repeats = 2 if self.duplicate_packages else 1
+        return [{"name": name} for name in self._packages(group, project) for _ in range(repeats)]
+
+    def list_versions(self, group: str, project: str, package: str) -> list[dict]:
+        packages = self._packages(group, project)
+        if package not in packages:
+            raise APIError("GET", f"/list/{group}/{project}/{package}", 404, "not found")
+        return [{"version": version} for version in packages[package]]
+
+    def get_version_status(self, group: str, project: str, package: str, version: str) -> dict:
+        if package not in self._packages(group, project):
+            raise APIError("GET", f"/status/{group}/{project}/{package}", 404, "not found")
+        return _status_response(_OLD_TIMESTAMP)
+
+    def delete_package(self, group: str, project: str, package: str) -> None:
+        self.delete_calls.append((group, project, package))
+        packages = self._packages(group, project)
+        if package not in packages:
+            raise APIError("DELETE", f"/delete/{group}/{project}/{package}", 404, "not found")
+        del packages[package]
 
 
 def _status_response_no_timestamp() -> dict:
@@ -803,25 +857,67 @@ class TestMissingKeys:
         with caplog.at_level("INFO"):
             cleaner.run_cycle()
 
-        assert client.get_version_status.call_count == 1
         assert any("WOULD DELETE grp/proj/pkg (1 versions)" in r.message for r in caplog.records)
 
-    def test_duplicate_package_is_evaluated_once(self):
-        """A package listing is iterated in memory with no re-list between deletes, so
-        under DRY_RUN=false a repeat is a second DELETE of something already gone."""
+    def test_duplicate_version_is_still_status_checked(self):
+        """The version gate deliberately does not skip the /status/ call. A misbehaving
+        server that repeats a version name with a divergent status must keep the fresh
+        entry's power to veto the delete — one wasted request beats deleting on a
+        half-read package. Costs one redundant call when the statuses agree."""
         client = MagicMock()
         client.list_groups.return_value = [{"name": "grp"}]
         client.list_projects.return_value = [{"name": "proj"}]
-        client.list_packages.return_value = [{"name": "pkg"}, {"name": "pkg"}]
-        client.list_versions.return_value = [{"version": "1.0"}]
-        client.get_version_status.return_value = _status_response(_OLD_TIMESTAMP)
+        client.list_packages.return_value = [{"name": "pkg"}]
+        client.list_versions.return_value = [{"version": "1.0"}, {"version": "1.0"}]
+        client.get_version_status.side_effect = [
+            _status_response(_OLD_TIMESTAMP),
+            _status_response(_FRESH_TIMESTAMP),
+        ]
 
         cleaner = _make_cleaner(client=client, dry_run=False)
         stats = cleaner.run_cycle()
 
+        assert client.get_version_status.call_count == 2
+        assert stats.deleted == 0
+        assert stats.skipped == 1
+        client.delete_package.assert_not_called()
+
+    def test_same_version_in_two_packages_is_not_deduped(self, caplog):
+        """The version gate is per package — hoisting it to per-project would report a
+        sibling package's version name as a duplicate of this one. Since the gate no
+        longer skips the status check, the warning is the whole observable effect, and a
+        warning naming a version the server only sent once is a false accusation."""
+        client = MagicMock()
+        client.list_groups.return_value = [{"name": "grp"}]
+        client.list_projects.return_value = [{"name": "proj"}]
+        client.list_packages.return_value = [{"name": "pkg-a"}, {"name": "pkg-b"}]
+        client.list_versions.return_value = [{"version": "1.0"}]
+        client.get_version_status.return_value = _status_response(_OLD_TIMESTAMP)
+
+        cleaner = _make_cleaner(client=client, dry_run=False)
+        with caplog.at_level("WARNING"):
+            stats = cleaner.run_cycle()
+
+        assert stats.deleted == 2
+        assert not [r for r in caplog.records if "already seen" in r.message]
+
+    def test_duplicate_package_is_evaluated_once(self):
+        """A package listing is iterated in memory with no re-list between deletes, so
+        under DRY_RUN=false the repeat reaches a package that is already gone — dying one
+        call short of DELETE, at list_versions. Uses a stateful fake because a MagicMock
+        hands back the same listing forever: with the gate removed its fixture reports two
+        successful deletes and no error, which is not what the portal would do."""
+        portal = _StatefulPortal({"grp": {"proj": {"pkg": ["1.0"]}}}, duplicate_packages=True)
+
+        cleaner = _make_cleaner(client=portal, dry_run=False)
+        stats = cleaner.run_cycle()
+
         assert stats.packages_evaluated == 1
         assert stats.deleted == 1
-        client.delete_package.assert_called_once_with("grp", "proj", "pkg")
+        assert stats.errors == 0
+        assert portal.delete_calls == [("grp", "proj", "pkg")]
+        # The fake really removes it, so a second pass would have had something to hit.
+        assert portal.tree["grp"]["proj"] == {}
 
     def test_same_project_name_in_two_groups_is_not_deduped(self):
         """The project gate is per group — the same name in another group is a
@@ -1447,6 +1543,53 @@ class TestScopeWarnings:
         assert stats.errors == 1
         # The group's project listing failed, so we cannot conclude proj-x is unmatched.
         assert not any("proj-x" in r.message for r in caplog.records)
+
+    def test_project_warning_suppressed_when_a_project_entry_is_malformed(self, caplog):
+        """A listing that failed and a listing with an unreadable entry in it leave us in
+        the same position: the filter's project may have been one of the names we could
+        not read. Only the failed listing used to suppress the warning."""
+        client = MagicMock()
+        client.list_groups.return_value = [{"name": "grp1"}]
+        client.list_projects.return_value = [{"name": 7}]
+
+        cleaner = _make_cleaner(client=client, target_projects=frozenset({"proj-x"}))
+        with caplog.at_level("WARNING"):
+            stats = cleaner.run_cycle()
+
+        assert stats.errors == 1
+        assert any("Malformed project entry" in r.message for r in caplog.records)
+        assert not any("proj-x" in r.message for r in caplog.records)
+
+    def test_both_warnings_suppressed_when_a_group_entry_is_malformed(self, caplog):
+        """Same reasoning one level up, and it reaches both levels: an unreadable group
+        entry may be the group a filter names, and its projects were never listed at all."""
+        client = MagicMock()
+        client.list_groups.return_value = [{"name": 7}]
+
+        cleaner = _make_cleaner(
+            client=client,
+            target_groups=frozenset({"grp-x"}),
+            target_projects=frozenset({"proj-x"}),
+        )
+        with caplog.at_level("WARNING"):
+            stats = cleaner.run_cycle()
+
+        assert stats.errors == 1
+        assert any("Malformed group entry" in r.message for r in caplog.records)
+        assert not any("grp-x" in r.message or "proj-x" in r.message for r in caplog.records)
+
+    def test_a_malformed_entry_in_one_group_does_not_silence_another(self, caplog):
+        """The suppression is per cycle at the project level, but it must not be traded
+        for silence on genuine typos — the group filter warning still fires."""
+        client = MagicMock()
+        client.list_groups.return_value = [{"name": "grp1"}]
+        client.list_projects.return_value = [{"name": 7}]
+
+        cleaner = _make_cleaner(client=client, target_groups=frozenset({"grp-typo"}))
+        with caplog.at_level("WARNING"):
+            cleaner.run_cycle()
+
+        assert any("grp-typo" in r.message for r in caplog.records)
 
     def test_no_warnings_when_interrupted(self, caplog):
         shutdown = threading.Event()
