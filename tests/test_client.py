@@ -30,10 +30,19 @@ def _make_client(**kwargs: object) -> SpectraClient:
     return SpectraClient(**defaults)  # type: ignore[arg-type]
 
 
-def _ok_response(json_data: dict | None = None, status_code: int = 200) -> MagicMock:
+_UNSET = object()
+
+
+def _ok_response(json_data: object = _UNSET, status_code: int = 200) -> MagicMock:
+    """Build a 200 response whose .json() returns exactly `json_data`.
+
+    The sentinel matters: the old `json_data or {}` collapsed None, [], 0 and "" to {},
+    so a bare `null` body — valid JSON that decodes cleanly and then breaks the `.get()`
+    in every list_* method — could not be expressed by any test in this file.
+    """
     resp = MagicMock()
     resp.status_code = status_code
-    resp.json.return_value = json_data or {}
+    resp.json.return_value = {} if json_data is _UNSET else json_data
     resp.text = ""
     return resp
 
@@ -355,6 +364,36 @@ class TestNonJsonResponse:
             client.list_groups()
         assert exc_info.value.status_code == 200
         assert "not valid JSON" in str(exc_info.value)
+
+    @pytest.mark.parametrize("body", [None, [], "x", 42, True])
+    @pytest.mark.parametrize(
+        "method, args",
+        [
+            ("list_groups", ()),
+            ("list_projects", ("g",)),
+            ("list_packages", ("g", "p")),
+            ("list_versions", ("g", "p", "k")),
+            ("get_version_status", ("g", "p", "k", "1.0")),
+        ],
+    )
+    @patch("assure_package_cleaner.client.requests.get")
+    def test_non_object_json_body_raises_api_error(
+        self, mock_get: MagicMock, method: str, args: tuple, body: object
+    ):
+        """A bare `null` is valid JSON — it decodes cleanly, then breaks the `.get()`.
+
+        Distinct from the case above, where `.json()` itself raises. Here the decode
+        succeeds and the AttributeError lands inside the client, where no caller catches
+        it: the walk aborts after earlier packages have already been deleted, no summary
+        line prints, and the process still exits 0. Raising APIError instead routes it
+        into the error channel every other bad response already uses.
+        """
+        mock_get.return_value = _ok_response(body)
+
+        client = _make_client()
+        with pytest.raises(APIError) as exc_info:
+            getattr(client, method)(*args)
+        assert "not a JSON object" in str(exc_info.value)
 
 
 # ---------------------------------------------------------------------------

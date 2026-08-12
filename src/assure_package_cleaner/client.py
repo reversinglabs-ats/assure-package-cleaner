@@ -91,9 +91,19 @@ class SpectraClient:
         if resp.status_code != 200:
             raise APIError("GET", url, resp.status_code, resp.text[:200])
         try:
-            return resp.json()
+            data = resp.json()
         except ValueError as exc:
             raise APIError("GET", url, resp.status_code, "Response is not valid JSON") from exc
+        # A bare `null`, `[]`, `"x"` or `42` is valid JSON that decodes cleanly and then
+        # explodes on the `.get()` in every caller below — an AttributeError that no
+        # caller catches, aborting the walk after earlier packages have been deleted.
+        # Raised as APIError so it routes into the error channel that already handles
+        # every other bad response.
+        if not isinstance(data, dict):
+            raise APIError(
+                "GET", url, resp.status_code, f"Response body is not a JSON object: {data!r:.200}"
+            )
+        return data
 
     def _with_retry(
         self,
