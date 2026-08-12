@@ -375,9 +375,6 @@ class TestTokenMasking:
         with patch.dict("os.environ", _env(), clear=True):
             cfg = Config.from_env()
         # Token is "tok_1234567890abcdef" (20 chars) -> should show first 4 + **** + last 4
-        import io
-        import logging
-
         handler = logging.StreamHandler(io.StringIO())
         logger = logging.getLogger("assure_package_cleaner.config")
         logger.addHandler(handler)
@@ -401,9 +398,6 @@ class TestTokenMasking:
             clear=True,
         ):
             cfg = Config.from_env()
-
-        import io
-        import logging
 
         handler = logging.StreamHandler(io.StringIO())
         logger = logging.getLogger("assure_package_cleaner.config")
@@ -578,9 +572,6 @@ class TestScopingConfig:
         assert cfg.target_projects == frozenset()
 
     def test_log_settings_shows_scope(self):
-        import io
-        import logging
-
         with patch.dict(
             "os.environ",
             _env(SPECTRA_ASSURE_GROUP="grp-a", SPECTRA_ASSURE_PROJECT="proj-x"),
@@ -601,9 +592,6 @@ class TestScopingConfig:
             logger.removeHandler(handler)
 
     def test_log_settings_shows_all_when_unscoped(self):
-        import io
-        import logging
-
         with patch.dict("os.environ", _env(), clear=True):
             cfg = Config.from_env()
 
