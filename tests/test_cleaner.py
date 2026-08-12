@@ -1690,17 +1690,27 @@ class TestScopeWarnings:
         assert any("Malformed group entry" in r.message for r in caplog.records)
         assert not any("grp-x" in r.message or "proj-x" in r.message for r in caplog.records)
 
-    def test_a_malformed_entry_in_one_group_does_not_silence_another(self, caplog):
-        """The suppression is per cycle at the project level, but it must not be traded
-        for silence on genuine typos — the group filter warning still fires."""
+    def test_a_malformed_project_entry_does_not_silence_a_group_typo(self, caplog):
+        """The project-level suppression must not be widened to cover group warnings —
+        that would silence a real typo, the exact failure the suppression was written to
+        avoid, one channel over.
+
+        The group filter has to both match and contain a typo. With only the typo, the
+        one real group fails the scope filter, `_process_group` is never called, and the
+        malformed entry is never read — which is how the previous version of this test
+        passed without exercising anything.
+        """
         client = MagicMock()
         client.list_groups.return_value = [{"name": "grp1"}]
         client.list_projects.return_value = [{"name": 7}]
 
-        cleaner = _make_cleaner(client=client, target_groups=frozenset({"grp-typo"}))
+        cleaner = _make_cleaner(client=client, target_groups=frozenset({"grp1", "grp-typo"}))
         with caplog.at_level("WARNING"):
-            cleaner.run_cycle()
+            stats = cleaner.run_cycle()
 
+        # Proves the malformed entry was actually reached this time.
+        assert stats.errors == 1
+        assert any("Malformed project entry" in r.message for r in caplog.records)
         assert any("grp-typo" in r.message for r in caplog.records)
 
     def test_no_warnings_when_interrupted(self, caplog):
