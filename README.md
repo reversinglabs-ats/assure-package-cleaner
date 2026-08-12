@@ -97,11 +97,17 @@ a group or project can only be reached by leaving the variable unset and letting
 the walk cover it.
 
 At the end of a cycle, any filter value that matched no group or project is
-logged as a warning, so typos surface quickly. These warnings are per cycle
-and are suppressed when the walk was incomplete — an interrupted cycle, or a
-group whose project listing failed — to avoid false alarms; likewise, an
-unmatched group filter suppresses the project warnings it would otherwise
-make meaningless.
+logged as a warning, so typos surface quickly. These warnings are per cycle and
+are suppressed where the walk could not establish what exists, to avoid false
+alarms. An interrupted cycle suppresses both levels. A group listing that failed,
+or an unreadable entry in one, also suppresses both — the group a filter names
+may have been the one that could not be read, and its projects were never listed.
+A failed or partly unreadable *project* listing suppresses only the project
+warnings; the group warnings still fire, correctly. So does an unmatched group
+filter, which would otherwise make every project warning meaningless.
+
+An absent warning therefore means either "matched" or "could not tell" — and the
+error count in the same cycle summary line distinguishes them.
 
 If a scope variable is set but contains no usable name — empty, or only
 whitespace and commas — the tool treats it as unset, meaning **no scope, i.e.
@@ -207,7 +213,7 @@ pip install -e ".[dev]"
 .venv/bin/ruff format --check .   # check formatting
 .venv/bin/ruff check --no-fix .   # lint
 .venv/bin/mypy src tests          # type check
-.venv/bin/pytest                  # run tests (212 tests, <1s)
+.venv/bin/pytest                  # run tests (217 tests, <1s)
 ```
 
 ### Project layout

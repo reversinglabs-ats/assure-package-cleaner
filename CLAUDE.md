@@ -17,7 +17,7 @@ A Python CLI/Docker tool that automatically deletes stale packages from the Reve
 # Type check
 .venv/bin/mypy src tests
 
-# Run tests (212 tests, should complete in <1s)
+# Run tests (217 tests, should complete in <1s)
 .venv/bin/pytest
 
 # Run the app locally (requires env vars — see below)
@@ -38,7 +38,7 @@ src/assure_package_cleaner/
 tests/
   test_config.py     # 75 tests — env var parsing, validation, defaults, scoping
   test_client.py     # 43 tests — API methods, errors, auth, delay
-  test_cleaner.py    # 87 tests — staleness logic, short-circuit, fail-safe, dry-run, scoping
+  test_cleaner.py    # 92 tests — staleness logic, short-circuit, fail-safe, dry-run, scoping
   test_main.py       # 7 tests  — config → cleaner/client wiring (dry_run and scope must survive it)
 Dockerfile           # Multi-stage Chainguard build
 ```
@@ -68,7 +68,7 @@ Dockerfile           # Multi-stage Chainguard build
 
 ## Code style and CI
 
-- **Ruff** for formatting (double quotes, spaces, 100-char lines) and linting (isort, pyupgrade, bugbear).
+- **Ruff** for formatting (double quotes, spaces, 100-char lines) and linting. The lint rules are an explicit `select` (`E4`, `E7`, `E9`, `F`, `I`, `UP`, `B`), not `extend-select` — a ruff release that widens its defaults must not widen our surface, which is what forced the old `<0.16` pin. Adopting a rule family is a deliberate edit to `select`. Markdown is in `extend-exclude` for the same reason: 0.16 began formatting Python blocks inside it.
 - **mypy** with `check_untyped_defs = true` but `disallow_untyped_defs = false`.
 - **pytest** with `pythonpath = ["src"]` — tests import from `assure_package_cleaner` directly.
 - All tests use `unittest.mock` — no additional test dependencies.
@@ -101,8 +101,10 @@ No pagination. Auth is `Authorization: Bearer <token>`.
 - The `pkg:rl/` prefix in URL paths is literal and required by the API.
 - Token masking in `config.py` assumes the token is at least 8 characters (shows first 4 + last 4).
 - Every listing entry goes through `_entry_name()` in `cleaner.py`. A malformed entry must **skip**, never raise — an exception mid-walk aborts the cycle after earlier packages have already been deleted. It rejects non-dicts, missing keys, non-string values, and blank names (which would build a URL with an empty path segment).
-- Duplicate entries are skipped at all four levels, and the cost depends on `DRY_RUN`. **In dry-run — the default — a duplicate at any level double-counts `deleted`, identically.** That matters most: the dry-run report is what an operator reads to decide whether to set `DRY_RUN=false`. Only under `DRY_RUN=false` do the levels diverge, because `_delete_package` returns before touching the API in dry-run and the package therefore never disappears. There: groups and projects re-list between passes, so a repeat costs wasted requests and inflated `groups_processed` / `projects_processed` / `packages_evaluated`; a package listing is iterated in memory with no re-list, so a repeat is a genuine second DELETE of something already gone, 404ing into `errors`; a duplicate version costs one extra `/status/` call and would inflate the version count in the DELETED log line.
-- When measuring any of this, use a **stateful fake** where a deleted package actually disappears, and run **both** `DRY_RUN` modes. A `MagicMock`'s `return_value` hands back the same list forever, which models dry-run faithfully but not live deletion.
-- The de-dupe gates are scoped one level up: projects per group, packages per project, versions per package. Never global — the same project name legitimately appears in many groups, and the same package name in many projects. Both are pinned (`test_same_project_name_in_two_groups_is_not_deduped`, `test_same_package_name_in_two_projects_is_not_deduped`).
+- Duplicate entries are gated at all four levels, but only three of them **skip**. **In dry-run — the default — a duplicate group, project or package double-counts `deleted`, identically.** That matters most: the dry-run report is what an operator reads to decide whether to set `DRY_RUN=false`. Only under `DRY_RUN=false` do those three diverge, because `_delete_package` returns before touching the API in dry-run and the package therefore never disappears. There: groups and projects re-list between passes, so a repeat costs wasted requests and inflated `groups_processed` / `projects_processed` / `packages_evaluated`; a package listing is iterated in memory with no re-list, so the repeat reaches a package that is already gone and 404s at `list_versions` into `errors` — one call short of DELETE, which is never issued twice.
+- **The version gate warns but deliberately does not `continue`** — it is the one level that behaves identically in both modes. A duplicate version cannot double-count `deleted` (that counter is per package), so gating it would buy only a saved `/status/` call and a tidier log count, at the price of letting a repeat with a *divergent* status through unchecked: `all_stale` would stay `True` and a fresh version would lose its veto. Skipping on doubt is the posture everywhere else in this walk, and it applies here too. `walked_versions` still exists — `len()` of it is the count in the DELETED line. Pinned by `test_duplicate_version_is_still_status_checked`.
+- When measuring any of this, use the **stateful fake** (`_StatefulPortal` in `tests/test_cleaner.py`), where a deleted package actually disappears, and run **both** `DRY_RUN` modes. A `MagicMock`'s `return_value` hands back the same list forever, which models dry-run faithfully but not live deletion — under `DRY_RUN=false` it reports a duplicate package as two *successful* deletes and no error, which is not what the portal does.
+- The de-dupe gates are scoped one level up: projects per group, packages per project, versions per package. Never global — the same project name legitimately appears in many groups, the same package name in many projects, and the same version name in many packages. All three are pinned (`test_same_project_name_in_two_groups_is_not_deduped`, `test_same_package_name_in_two_projects_is_not_deduped`, `test_same_version_in_two_packages_is_not_deduped`).
 - Each gate sits **above** its scope filter so a misbehaving server's duplicates surface even for entries that would not be walked, and each one warns without touching `errors` — nothing failed to be evaluated. Both choices are pinned by tests.
+- The end-of-cycle "filter matched no group/project" warnings are suppressed whenever the walk could not enumerate what the filter names — an interrupt, a failed project listing, **or a malformed entry**, which leaves exactly the same doubt as a listing that failed. A malformed *group* entry suppresses both levels, since that group's projects were never listed either. Do not replace this channel with a blanket `stats.errors == 0` check: it passes the suite but silences genuine typo warnings whenever any unrelated delete fails in the same cycle.
 - `tests/test_main.py` exists because `__main__` is where `DRY_RUN` and the scope filters meet the `Cleaner`. A wiring slip there is the one class of bug that **over**-deletes, and type checking can't catch it — `target_groups`/`target_projects` are both `frozenset[str]`. Assert kwargs there, not just in `test_config.py`.

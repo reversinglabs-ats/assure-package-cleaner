@@ -171,12 +171,14 @@ class Cleaner:
         # Per project, not per group or per cycle: the same package name in a different
         # project is a different package and must still be evaluated.
         #
-        # In dry-run — the default — a duplicate at any level double-counts `deleted`, and
-        # that report is what an operator reads to decide whether to set DRY_RUN=false.
-        # Under DRY_RUN=false the levels diverge: groups and projects re-list from the API
-        # between passes, so the cost there is wasted requests and inflated counters, while
-        # this listing is iterated in memory with no re-list, making a repeat a genuine
-        # second DELETE of something already gone that 404s into `errors`.
+        # In dry-run — the default — a duplicate group, project or package double-counts
+        # `deleted`, and that report is what an operator reads to decide whether to set
+        # DRY_RUN=false. A duplicate version cannot: `deleted` counts packages.
+        # Under DRY_RUN=false these three levels diverge: groups and projects re-list from
+        # the API between passes, so the cost there is wasted requests and inflated
+        # counters, while this listing is iterated in memory with no re-list, so the repeat
+        # reaches a package that is already gone and 404s at `list_versions` into `errors`
+        # — one call short of DELETE, which is never attempted twice.
         walked_packages: set[str] = set()
 
         for package in packages:
