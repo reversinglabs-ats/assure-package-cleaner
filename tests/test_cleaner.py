@@ -1036,10 +1036,14 @@ class TestMalformedListingContainer:
         assert stats.errors == 1
         assert stats.groups_processed == 0
 
-    def test_the_summary_line_survives_an_abort(self, caplog):
+    def test_the_summary_line_survives_an_abort_and_says_aborted(self, caplog):
         """The summary is the only aggregate an operator gets, and an abort is when they
-        need it most. Pinned separately from the stats because the two early returns in
-        _walk bypassed it before, and nothing in the suite noticed."""
+        need it most — but the status word has to carry the difference.
+
+        Printing "Cycle complete" here would be worse than the no-line-at-all it
+        replaced: a scheduler watching for a missing summary would stop seeing one, and
+        the line would certify a cycle that walked nothing.
+        """
         client = MagicMock()
         client.list_groups.return_value = None
 
@@ -1047,8 +1051,20 @@ class TestMalformedListingContainer:
             _make_cleaner(client=client).run_cycle()
 
         assert any(
-            "Cycle complete — deleted=0 skipped=0 errors=1" in r.message for r in caplog.records
+            "Cycle ABORTED — deleted=0 skipped=0 errors=1" in r.message for r in caplog.records
         )
+        assert not any("Cycle complete" in r.message for r in caplog.records)
+
+    def test_a_failed_group_listing_also_says_aborted(self, caplog):
+        """The other early return in _walk. Both are aborts; neither may say complete."""
+        client = MagicMock()
+        client.list_groups.side_effect = APIError("GET", "url", 500, "err")
+
+        with caplog.at_level("INFO"):
+            _make_cleaner(client=client).run_cycle()
+
+        assert any("Cycle ABORTED" in r.message for r in caplog.records)
+        assert not any("Cycle complete" in r.message for r in caplog.records)
 
     def test_an_unexpected_exception_still_logs_a_summary_marked_aborted(self, caplog):
         """Defence in depth for the class of bug this whole area is about. If something
@@ -1108,13 +1124,43 @@ class TestMalformedListingContainer:
         assert stats.errors == 1
         assert not any("proj-x" in r.message for r in caplog.records)
 
-    def test_a_huge_malformed_listing_is_truncated_in_the_log(self, caplog):
-        """A malformed 50k-entry response is still just a malformed response. Dumping the
-        whole structure into one ERROR line buries every other line in the cycle."""
+    # Each container guard gets its own case: _brief is a shared helper, so mutating its
+    # body is killed by any one call site and proves nothing about the others. Reverting
+    # the group, package and version sites individually passed the whole suite before.
+    @pytest.mark.parametrize(
+        "level, fixtures",
+        [
+            ("group", {"list_groups": {"groups": ["x" * 100] * 500}}),
+            (
+                "project",
+                {
+                    "list_groups": [{"name": "grp"}],
+                    "list_projects": {"projects": ["x" * 100] * 500},
+                },
+            ),
+            (
+                "package",
+                {
+                    "list_groups": [{"name": "grp"}],
+                    "list_projects": [{"name": "proj"}],
+                    "list_packages": {"packages": ["x" * 100] * 500},
+                },
+            ),
+            (
+                "version",
+                {
+                    "list_groups": [{"name": "grp"}],
+                    "list_projects": [{"name": "proj"}],
+                    "list_packages": [{"name": "pkg"}],
+                    "list_versions": {"versions": ["x" * 100] * 500},
+                },
+            ),
+        ],
+    )
+    def test_a_huge_malformed_listing_is_truncated_at_every_level(self, caplog, level, fixtures):
         client = MagicMock()
-        client.list_groups.return_value = [{"name": "grp"}]
-        # A dict, so it passes _get's guard and reaches the cleaner's isinstance check.
-        client.list_projects.return_value = {"projects": ["x" * 100] * 500}
+        for name, value in fixtures.items():
+            getattr(client, name).return_value = value
 
         cleaner = _make_cleaner(client=client)
         with caplog.at_level("ERROR"):
@@ -1122,8 +1168,36 @@ class TestMalformedListingContainer:
 
         assert stats.errors == 1
         (record,) = [r for r in caplog.records if "is not a list" in r.message]
-        assert len(record.message) < 400
+        assert len(record.message) < 400, f"{level} site is not truncated"
         assert "chars)" in record.message
+
+    def test_a_huge_malformed_entry_is_truncated(self, caplog):
+        """Entries, not just containers — the per-entry path is the one a genuinely
+        list-shaped hostile response takes."""
+        client = MagicMock()
+        client.list_groups.return_value = [{"name": ["x" * 50000]}]
+
+        cleaner = _make_cleaner(client=client)
+        with caplog.at_level("WARNING"):
+            cleaner.run_cycle()
+
+        (record,) = [r for r in caplog.records if "Malformed group entry" in r.message]
+        assert len(record.message) < 400
+
+    def test_a_huge_unparseable_timestamp_is_truncated(self, caplog):
+        client = MagicMock()
+        client.list_groups.return_value = [{"name": "grp"}]
+        client.list_projects.return_value = [{"name": "proj"}]
+        client.list_packages.return_value = [{"name": "pkg"}]
+        client.list_versions.return_value = [{"version": "1.0"}]
+        client.get_version_status.return_value = _status_response("z" * 50000)
+
+        cleaner = _make_cleaner(client=client)
+        with caplog.at_level("WARNING"):
+            cleaner.run_cycle()
+
+        (record,) = [r for r in caplog.records if "Unparseable timestamp" in r.message]
+        assert len(record.message) < 400
 
     def test_null_package_listing_skips_the_project(self):
         client = MagicMock()
@@ -1153,21 +1227,48 @@ class TestMalformedListingContainer:
         assert stats.deleted == 0
         client.delete_package.assert_not_called()
 
-    def test_non_dict_status_payload_skips_the_package(self):
-        """`_get` returns whatever the body decoded to, so a bare `null` reaches
-        _extract_timestamp. It must skip the package, not raise."""
+    def test_a_non_dict_status_body_now_counts_as_an_error_not_a_skip(self):
+        """Pins the counter *the real client produces*, which e8e3ae5 moved.
+
+        Before that commit a bare-null /status/ body reached _extract_timestamp, returned
+        None, and counted as `skipped`. Now `_get` rejects it first, so it is an APIError
+        and counts as `errors`. Same fail-safe direction, no deletion — but a different
+        bucket, so this asserts the APIError path a real client would take rather than
+        handing the cleaner a raw None that production can no longer produce.
+        """
         client = MagicMock()
         client.list_groups.return_value = [{"name": "grp"}]
         client.list_projects.return_value = [{"name": "proj"}]
         client.list_packages.return_value = [{"name": "pkg"}]
         client.list_versions.return_value = [{"version": "1.0"}]
-        client.get_version_status.return_value = None
+        client.get_version_status.side_effect = APIError(
+            "GET", "url", 200, "Response body is not a JSON object: None"
+        )
 
         cleaner = _make_cleaner(client=client, dry_run=False)
         stats = cleaner.run_cycle()
 
         assert stats.deleted == 0
+        assert stats.errors == 1
+        assert stats.skipped == 0
+        client.delete_package.assert_not_called()
+
+    def test_a_null_analysis_value_is_still_a_skip(self):
+        """The other half: a *valid* status dict whose analysis is null stays in `skipped`.
+        The OpenAPI spec marks analysis.timestamp nullable alongside status: PROCESSING,
+        so an in-progress version must not land in `errors`."""
+        client = MagicMock()
+        client.list_groups.return_value = [{"name": "grp"}]
+        client.list_projects.return_value = [{"name": "proj"}]
+        client.list_packages.return_value = [{"name": "pkg"}]
+        client.list_versions.return_value = [{"version": "1.0"}]
+        client.get_version_status.return_value = {"analysis": None}
+
+        cleaner = _make_cleaner(client=client, dry_run=False)
+        stats = cleaner.run_cycle()
+
         assert stats.skipped == 1
+        assert stats.errors == 0
         client.delete_package.assert_not_called()
 
 
@@ -1285,6 +1386,53 @@ class TestDeletionCorrectness:
 
 
 class TestShutdownHandling:
+    def test_the_interrupted_arm_of_the_summary_line(self, caplog):
+        """The status word, not just stats.interrupted.
+
+        Eleven tests assert the flag; none asserted the word, so deleting the arm
+        outright — or swapping its precedence with the abort arm — passed the suite.
+        README documents these three words as the way to tell a partial cycle from a
+        final one, which makes the word itself the contract.
+        """
+        shutdown = threading.Event()
+        shutdown.set()
+
+        client = MagicMock()
+        client.list_groups.return_value = [{"name": "grp"}]
+
+        with caplog.at_level("INFO"):
+            _make_cleaner(client=client, shutdown=shutdown).run_cycle()
+
+        assert any("Cycle interrupted — deleted=0" in r.message for r in caplog.records)
+        assert not any(
+            "Cycle complete" in r.message or "ABORTED" in r.message for r in caplog.records
+        )
+
+    def test_an_exception_outranks_the_interrupt_flag(self, caplog):
+        """If a cycle was interrupted *and* something crashed, the crash is the news.
+
+        Drives _walk directly rather than through the client. Every natural route to
+        "interrupted, then an exception" is blocked — once the shutdown flag is set, each
+        level checks it and returns before anything else can raise — so a client-level
+        fixture cannot reach this state, and a version of this test that used one passed
+        against the swapped precedence it was written to catch.
+        """
+        cleaner = _make_cleaner()
+
+        def interrupt_then_explode(cutoff, stats):
+            stats.interrupted = True
+            raise RuntimeError("boom")
+
+        with (
+            caplog.at_level("INFO"),
+            patch.object(cleaner, "_walk", interrupt_then_explode),
+            pytest.raises(RuntimeError, match="boom"),
+        ):
+            cleaner.run_cycle()
+
+        assert any("Cycle ABORTED" in r.message for r in caplog.records)
+        assert not any("Cycle interrupted" in r.message for r in caplog.records)
+
     def test_shutdown_before_any_group(self):
         """Shutdown set before cycle starts processing groups."""
         shutdown = threading.Event()

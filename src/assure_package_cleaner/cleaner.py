@@ -46,19 +46,23 @@ class Cleaner:
         )
 
         # The summary line is the only aggregate an operator gets, and every abort path is
-        # exactly when they need it most. `finally` makes it unconditional — including for
-        # an exception on the way out, which is reported as ABORTED rather than complete.
-        completed = False
+        # exactly when they need it most, so `finally` makes it unconditional. The status
+        # word has to carry the difference: "Cycle complete" on a cycle that walked
+        # nothing is a false all-clear, and worse than the no-line-at-all it replaced,
+        # because a scheduler watching for a missing line would no longer see one.
+        raised = True
+        walked = False
         try:
-            self._walk(cutoff, stats)
-            completed = True
+            walked = self._walk(cutoff, stats)
+            raised = False
         finally:
-            if stats.interrupted:
-                status = "Cycle interrupted"
-            elif completed:
-                status = "Cycle complete"
-            else:
+            if raised or not walked:
+                # Either an exception escaped, or the walk never got past listing groups.
                 status = "Cycle ABORTED"
+            elif stats.interrupted:
+                status = "Cycle interrupted"
+            else:
+                status = "Cycle complete"
             logger.info(
                 "%s — deleted=%d skipped=%d errors=%d (groups=%d projects=%d packages=%d)",
                 status,
@@ -71,18 +75,23 @@ class Cleaner:
             )
         return stats
 
-    def _walk(self, cutoff: datetime, stats: CycleStats) -> None:
+    def _walk(self, cutoff: datetime, stats: CycleStats) -> bool:
+        """Walk the tree. Returns False if the group listing never yielded anything to walk.
+
+        The return value feeds the summary line's status word: an aborted cycle must not
+        be reported as a complete one.
+        """
         try:
             groups = self.client.list_groups()
         except APIError:
             logger.exception("Failed to list groups — aborting cycle")
             stats.errors += 1
-            return
+            return False
 
         if not isinstance(groups, list):
             logger.error("Group listing is not a list: %s — aborting cycle", _brief(groups))
             stats.errors += 1
-            return
+            return False
 
         seen_projects: set[str] = set()
         walked_groups: set[str] = set()
@@ -95,14 +104,16 @@ class Cleaner:
                 break
             group_name = _entry_name(group)
             if group_name is None:
-                logger.warning("Malformed group entry: %r — skipping", group)
+                logger.warning("Malformed group entry: %s — skipping", _brief(group))
                 stats.errors += 1
                 groups_fully_listed = False
                 continue
             # Checked above the scope filter on purpose: a misbehaving server's duplicates
             # are worth surfacing even for groups we would not walk.
             if group_name in walked_groups:
-                logger.warning("Duplicate group entry %r — already seen, skipping", group_name)
+                logger.warning(
+                    "Duplicate group entry %s — already seen, skipping", _brief(group_name)
+                )
                 continue
             walked_groups.add(group_name)
             if self.target_groups and group_name not in self.target_groups:
@@ -116,6 +127,7 @@ class Cleaner:
             self._warn_unmatched(
                 walked_groups, seen_projects, groups_fully_listed, projects_fully_listed
             )
+        return True
 
     def _process_group(
         self, group: str, cutoff: datetime, stats: CycleStats, seen_projects: set[str]
@@ -147,7 +159,9 @@ class Cleaner:
                 return True
             project_name = _entry_name(project)
             if project_name is None:
-                logger.warning("Malformed project entry in group %s: %r — skipping", group, project)
+                logger.warning(
+                    "Malformed project entry in group %s: %s — skipping", group, _brief(project)
+                )
                 stats.errors += 1
                 fully_listed = False
                 continue
@@ -226,7 +240,10 @@ class Cleaner:
             package_name = _entry_name(package)
             if package_name is None:
                 logger.warning(
-                    "Malformed package entry in %s/%s: %r — skipping", group, project, package
+                    "Malformed package entry in %s/%s: %s — skipping",
+                    group,
+                    project,
+                    _brief(package),
                 )
                 stats.errors += 1
                 continue
@@ -282,9 +299,9 @@ class Cleaner:
             version = _entry_name(version_info, key="version")
             if version is None:
                 logger.warning(
-                    "Malformed version entry in %s: %r — skipping package (fail-safe)",
+                    "Malformed version entry in %s: %s — skipping package (fail-safe)",
                     pkg_path,
-                    version_info,
+                    _brief(version_info),
                 )
                 stats.errors += 1
                 return
@@ -321,8 +338,8 @@ class Cleaner:
                 analysis_time = _parse_timestamp(timestamp_str)
             except ValueError:
                 logger.warning(
-                    "Unparseable timestamp %r for %s@%s — skipping package (fail-safe)",
-                    timestamp_str,
+                    "Unparseable timestamp %s for %s@%s — skipping package (fail-safe)",
+                    _brief(timestamp_str),
                     pkg_path,
                     version,
                 )
@@ -376,9 +393,15 @@ class Cleaner:
 def _brief(value: object, limit: int = 200) -> str:
     """repr() a value for a log line, truncated.
 
-    Used only for whole listing payloads. A malformed 50k-entry response is still a
-    malformed response, and dumping the entire structure into one ERROR line buries
-    every other line in the cycle.
+    Wraps every site that logs server-controlled data of unbounded size: the whole
+    listing payload in the four container guards, each malformed entry, and the raw
+    timestamp string. One hostile response should not be able to bury the rest of the
+    cycle in a single log record.
+
+    Note what this does *not* bound: a listing that is a genuine list of 50,000
+    malformed entries passes the container guard and goes down the per-entry path, one
+    truncated record each. That is 50,000 records — bounded per record, not in total.
+    Tracked as #21.
     """
     text = repr(value)
     return text if len(text) <= limit else f"{text[:limit]}… ({len(text)} chars)"
