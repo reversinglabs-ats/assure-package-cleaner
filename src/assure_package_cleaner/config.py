@@ -11,6 +11,11 @@ from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
 
+# Ceilings, not policy: both are orders of magnitude past any real configuration, and
+# exist only to keep a typo'd value from reaching a C-level conversion that overflows.
+_MAX_THRESHOLD_DAYS = 36_500  # 100 years
+_MAX_INTERVAL_HOURS = 87_600  # 10 years
+
 
 class ConfigError(Exception):
     """Raised when required configuration is missing or invalid."""
@@ -44,8 +49,12 @@ class Config:
 
         base_url, org = _parse_base_url(base_url_raw, org_override=org_override)
 
-        stale_threshold_days = _parse_int("STALE_THRESHOLD_DAYS", 180, minimum=1)
-        cleanup_interval_hours = _parse_int("CLEANUP_INTERVAL_HOURS", 24, minimum=0)
+        stale_threshold_days = _parse_int(
+            "STALE_THRESHOLD_DAYS", 180, minimum=1, maximum=_MAX_THRESHOLD_DAYS
+        )
+        cleanup_interval_hours = _parse_int(
+            "CLEANUP_INTERVAL_HOURS", 24, minimum=0, maximum=_MAX_INTERVAL_HOURS
+        )
         request_delay_seconds = _parse_float("REQUEST_DELAY_SECONDS", 0.5, minimum=0.0)
         log_level = os.environ.get("LOG_LEVEL", "INFO").upper()
 
@@ -122,7 +131,7 @@ def _parse_base_url(raw: str, *, org_override: str | None = None) -> tuple[str, 
     return base_url, org
 
 
-def _parse_int(name: str, default: int, *, minimum: int) -> int:
+def _parse_int(name: str, default: int, *, minimum: int, maximum: int) -> int:
     raw = os.environ.get(name, "")
     if not raw:
         return default
@@ -132,6 +141,12 @@ def _parse_int(name: str, default: int, *, minimum: int) -> int:
         raise ConfigError(f"{name} must be an integer, got: {raw!r}") from exc
     if value < minimum:
         raise ConfigError(f"{name} must be >= {minimum}, got: {value}")
+    # Python ints are unbounded; the C-level conversions downstream are not. Without this
+    # the value is accepted here and blows up later — `timedelta(days=...)` at the top of
+    # run_cycle, or `Event.wait(seconds)` in the periodic loop — where in periodic mode it
+    # becomes a crash/sleep/crash loop that deletes nothing forever while exiting 0.
+    if value > maximum:
+        raise ConfigError(f"{name} must be <= {maximum}, got: {value}")
     return value
 
 

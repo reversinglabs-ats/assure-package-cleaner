@@ -257,6 +257,20 @@ class TestStaleThresholdDays:
             with pytest.raises(ConfigError, match="must be >= 1"):
                 Config.from_env()
 
+    @pytest.mark.parametrize("raw", ["100000000", "999999999999"])
+    def test_absurdly_large_raises(self, raw):
+        """Python ints are unbounded; timedelta(days=...) at the top of run_cycle is not.
+        Accepted here, these reach OverflowError ("date value out of range", then "Python
+        int too large to convert to C int") on every cycle — which in periodic mode is a
+        crash/sleep/crash loop that deletes nothing forever while still exiting 0."""
+        with patch.dict("os.environ", _env(STALE_THRESHOLD_DAYS=raw), clear=True):
+            with pytest.raises(ConfigError, match="must be <="):
+                Config.from_env()
+
+    def test_the_ceiling_itself_is_accepted(self):
+        with patch.dict("os.environ", _env(STALE_THRESHOLD_DAYS="36500"), clear=True):
+            assert Config.from_env().stale_threshold_days == 36500
+
     def test_negative_raises(self):
         with patch.dict("os.environ", _env(STALE_THRESHOLD_DAYS="-5"), clear=True):
             with pytest.raises(ConfigError, match="must be >= 1"):
@@ -290,6 +304,17 @@ class TestCleanupIntervalHours:
             with pytest.raises(ConfigError, match="must be an integer"):
                 Config.from_env()
 
+    def test_absurdly_large_raises(self):
+        """Overflows Event.wait(seconds) in the periodic loop — and that call sits outside
+        __main__'s try/except, so it takes the process down rather than being swallowed."""
+        with patch.dict("os.environ", _env(CLEANUP_INTERVAL_HOURS="999999999999"), clear=True):
+            with pytest.raises(ConfigError, match="must be <="):
+                Config.from_env()
+
+    def test_the_ceiling_itself_is_accepted(self):
+        with patch.dict("os.environ", _env(CLEANUP_INTERVAL_HOURS="87600"), clear=True):
+            assert Config.from_env().cleanup_interval_hours == 87600
+
 
 # ---------------------------------------------------------------------------
 # REQUEST_DELAY_SECONDS validation
@@ -312,15 +337,20 @@ class TestRequestDelay:
             with pytest.raises(ConfigError, match="must be a number"):
                 Config.from_env()
 
-    @pytest.mark.parametrize("raw", ["nan", "NaN", "inf", "-inf", "infinity"])
+    @pytest.mark.parametrize("raw", ["nan", "NaN", "inf", "-inf", "infinity", "1e999"])
     def test_non_finite_raises(self, raw):
         """float() accepts all of these and the range check does not reject them —
         `nan < 0.0` is False. A nan delay then fails `if request_delay > 0` too, so the
         inter-request pacing silently disappears while the banner logs "Request delay:
-        nans". -inf is caught by the range check; the rest need the finite check.
+        nans".
+
+        The match is deliberately narrow. `isfinite` runs before the range check, so
+        every value here — `-inf` included — must produce the *finite* error. Accepting
+        "must be >= 0" as well would let the `-inf` case pass on the range check alone
+        and stop discriminating against removal of the finite check.
         """
         with patch.dict("os.environ", _env(REQUEST_DELAY_SECONDS=raw), clear=True):
-            with pytest.raises(ConfigError, match="must be a finite number|must be >= 0"):
+            with pytest.raises(ConfigError, match="must be a finite number"):
                 Config.from_env()
 
 
