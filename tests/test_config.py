@@ -8,7 +8,12 @@ from unittest.mock import patch
 
 import pytest
 
-from assure_package_cleaner.config import Config, ConfigError, _parse_base_url
+from assure_package_cleaner.config import (
+    _VALID_LOG_LEVELS,
+    Config,
+    ConfigError,
+    _parse_base_url,
+)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -666,10 +671,21 @@ class TestScopingConfig:
 
 
 class TestLogLevel:
-    @pytest.mark.parametrize("raw", ["debug", "INFO", "Warning", "error", "critical", "notset"])
+    @pytest.mark.parametrize(
+        "raw",
+        ["debug", "INFO", "Warning", "error", "critical", "notset", "WARN", "warn", "FATAL"],
+    )
     def test_valid_levels_any_case(self, raw):
+        """WARN and FATAL are the ones that matter here. A hand-written allowlist omitted
+        both — logging accepts them, so `-e LOG_LEVEL=WARN` was a working deployment that
+        validation turned into an exit-1 crashloop on every start."""
         with patch.dict("os.environ", _env(LOG_LEVEL=raw), clear=True):
             assert Config.from_env().log_level == raw.upper()
+
+    def test_the_allowlist_is_exactly_what_logging_accepts(self):
+        """Derived, not hand-listed: anything basicConfig would take must pass the gate,
+        or validation is stricter than the thing it stands in for."""
+        assert set(_VALID_LOG_LEVELS) == set(logging.getLevelNamesMapping())
 
     @pytest.mark.parametrize("raw", ["verbose", "trace", "10", ""])
     def test_invalid_level_is_a_clean_config_error(self, raw):

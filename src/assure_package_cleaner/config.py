@@ -17,7 +17,12 @@ _MAX_THRESHOLD_DAYS = 36_500  # 100 years
 _MAX_INTERVAL_HOURS = 87_600  # 10 years
 _MAX_REQUEST_DELAY = 3_600.0  # 1 hour between calls is already absurd
 
-_VALID_LOG_LEVELS = ("CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG", "NOTSET")
+# Taken from logging itself rather than hand-listed. A hand-written allowlist shipped
+# without WARN and FATAL — both accepted by basicConfig, so `-e LOG_LEVEL=WARN` was a
+# working deployment that a narrower list turned into an exit-1 crashloop on upgrade.
+# The point of validating here is to fail cleanly on a *typo*, not to be stricter than
+# the thing it stands in for.
+_VALID_LOG_LEVELS = tuple(sorted(logging.getLevelNamesMapping()))
 
 
 class ConfigError(Exception):
