@@ -1080,7 +1080,10 @@ class TestMalformedListingContainer:
 
         assert any("Cycle ABORTED — deleted=0" in r.message for r in caplog.records)
 
-    def test_the_normal_path_still_says_complete(self, caplog):
+    def test_an_empty_org_is_complete_not_aborted(self, caplog):
+        """Nothing to do is not an abort. _walk returns True for an empty group list, so
+        an org with no groups still reports `Cycle complete` — the docstring said
+        otherwise before this test existed."""
         client = MagicMock()
         client.list_groups.return_value = []
 

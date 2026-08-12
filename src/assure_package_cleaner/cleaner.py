@@ -76,10 +76,11 @@ class Cleaner:
         return stats
 
     def _walk(self, cutoff: datetime, stats: CycleStats) -> bool:
-        """Walk the tree. Returns False if the group listing never yielded anything to walk.
+        """Walk the tree. Returns False only if the group listing could not be read.
 
-        The return value feeds the summary line's status word: an aborted cycle must not
-        be reported as a complete one.
+        An org with no groups is a successful walk and returns True — "nothing to do" is
+        not an abort. The return value feeds the summary line's status word, and an empty
+        org must still report `Cycle complete`.
         """
         try:
             groups = self.client.list_groups()
