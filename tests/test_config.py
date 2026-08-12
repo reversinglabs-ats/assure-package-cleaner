@@ -719,22 +719,44 @@ class TestBaseUrlEdgeCases:
         assert org == "org"
         assert "HTTPS" not in base_url and "HtTp" not in base_url
 
-    def test_credentials_are_masked_in_the_log(self, caplog):
-        """The API token is masked in log_settings; a password embedded in the base URL
-        was not, and survives into base_url verbatim."""
-        env = _env(SPECTRA_ASSURE_BASE_URL="https://user:s3cr3t@my.secure.software/acme")
-        with patch.dict("os.environ", env, clear=True):
+    @pytest.mark.parametrize(
+        "raw",
+        [
+            "https://svcacct:hunter2@my.secure.software/acme",
+            "https://tokenonly@my.secure.software/acme",
+            "http://u:p@localhost:8080/acme",
+        ],
+    )
+    def test_credentials_in_the_url_are_rejected(self, raw):
+        """Rejected, not masked. base_url reaches three log sites — log_settings, every
+        client DEBUG line, and every APIError message (which surfaces at the default INFO
+        level via logger.exception) — and masking each is whack-a-mole. Masking only the
+        first is what the previous version of this test certified as complete.
+
+        Rejecting cannot break a working deployment: requests builds a Basic header from
+        the userinfo and overwrites the Bearer token the API needs, so such a URL is
+        already 401-ing.
+        """
+        with patch.dict("os.environ", _env(SPECTRA_ASSURE_BASE_URL=raw), clear=True):
+            with pytest.raises(ConfigError, match="must not contain credentials"):
+                Config.from_env()
+
+    def test_no_log_line_can_carry_a_password(self):
+        """The property the rejection buys, asserted directly against base_url."""
+        with patch.dict("os.environ", _env(), clear=True):
             cfg = Config.from_env()
+        assert "@" not in cfg.base_url
 
-        handler = logging.StreamHandler(io.StringIO())
-        log = logging.getLogger("assure_package_cleaner.config")
-        log.addHandler(handler)
-        log.setLevel(logging.INFO)
-        try:
-            cfg.log_settings()
-            output = handler.stream.getvalue()
-        finally:
-            log.removeHandler(handler)
-
-        assert "s3cr3t" not in output
-        assert "user:****@my.secure.software" in output
+    @pytest.mark.parametrize(
+        "raw, expected",
+        [
+            ("https://[2001:db8::1]:8443/acme", "https://[2001:db8::1]:8443/api/public/v1"),
+            ("https://[2001:db8::1]/acme", "https://[2001:db8::1]/api/public/v1"),
+        ],
+    )
+    def test_ipv6_literals_keep_their_brackets(self, raw, expected):
+        """base_url is built from netloc rather than rebuilt from parsed.hostname, which
+        would drop the brackets and yield an unparseable https://2001:db8::1:8443/… ."""
+        base_url, org = _parse_base_url(raw)
+        assert base_url == expected
+        assert org == "acme"

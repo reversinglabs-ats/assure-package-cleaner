@@ -105,7 +105,7 @@ class Config:
         else:
             masked_token = "****"  # nosec B105 — this is a mask, not a password
         logger.info("Configuration:")
-        logger.info("  Base URL:              %s", _mask_userinfo(self.base_url))
+        logger.info("  Base URL:              %s", self.base_url)
         logger.info("  Organization:          %s", self.org)
         logger.info("  API Token:             %s", masked_token)
         logger.info("  Stale threshold:       %d days", self.stale_threshold_days)
@@ -131,6 +131,24 @@ def _parse_base_url(raw: str, *, org_override: str | None = None) -> tuple[str, 
         raw = "https://" + raw
 
     parsed = urlparse(raw)
+
+    # Checked before anything else is derived from the URL. netloc carries any
+    # user:password@ through verbatim, and base_url is logged by log_settings,
+    # interpolated into every client DEBUG line, and embedded in every APIError message —
+    # which surfaces at the default INFO level via logger.exception. Masking at each of
+    # those sites is whack-a-mole; keeping credentials out of base_url is not.
+    #
+    # Rejected rather than stripped, because such a URL cannot be a working deployment:
+    # requests builds an Authorization: Basic header from the userinfo and overwrites the
+    # Bearer token this API actually needs, so the deployment is already 401-ing. Failing
+    # at startup with the reason beats a 401 storm whose diagnosis leaks the password.
+    if "@" in parsed.netloc:
+        raise ConfigError(
+            "SPECTRA_ASSURE_BASE_URL must not contain credentials. Remove the "
+            "'user:password@' portion and authenticate with SPECTRA_API_TOKEN — "
+            "requests would otherwise replace the Bearer token with Basic auth."
+        )
+
     path_parts = [p for p in parsed.path.strip("/").split("/") if p]
 
     if org_override:
@@ -150,23 +168,11 @@ def _parse_base_url(raw: str, *, org_override: str | None = None) -> tuple[str, 
                 "environment variable."
             )
 
+    # netloc, not a rebuild from parsed.hostname — that would strip the brackets an IPv6
+    # literal needs and produce an unparseable https://2001:db8::1:8443/… .
     base_url = f"{parsed.scheme}://{parsed.netloc}/api/public/v1"
 
     return base_url, org
-
-
-def _mask_userinfo(url: str) -> str:
-    """Redact any user:password@ in a URL before logging it.
-
-    Credentials embedded in SPECTRA_ASSURE_BASE_URL survive into base_url verbatim. The
-    API token is masked in this same block; this was not.
-    """
-    scheme, sep, rest = url.partition("://")
-    if not sep or "@" not in rest:
-        return url
-    userinfo, _, host = rest.rpartition("@")
-    user, has_pw, _ = userinfo.partition(":")
-    return f"{scheme}://{user}:****@{host}" if has_pw else f"{scheme}://****@{host}"
 
 
 def _parse_int(name: str, default: int, *, minimum: int, maximum: int) -> int:
