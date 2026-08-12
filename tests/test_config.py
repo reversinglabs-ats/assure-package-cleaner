@@ -276,6 +276,11 @@ class TestStaleThresholdDays:
         with patch.dict("os.environ", _env(STALE_THRESHOLD_DAYS="36500"), clear=True):
             assert Config.from_env().stale_threshold_days == 36500
 
+    def test_just_over_the_ceiling_is_rejected(self):
+        with patch.dict("os.environ", _env(STALE_THRESHOLD_DAYS="36501"), clear=True):
+            with pytest.raises(ConfigError, match="must be <="):
+                Config.from_env()
+
     def test_negative_raises(self):
         with patch.dict("os.environ", _env(STALE_THRESHOLD_DAYS="-5"), clear=True):
             with pytest.raises(ConfigError, match="must be >= 1"):
@@ -320,6 +325,11 @@ class TestCleanupIntervalHours:
         with patch.dict("os.environ", _env(CLEANUP_INTERVAL_HOURS="87600"), clear=True):
             assert Config.from_env().cleanup_interval_hours == 87600
 
+    def test_just_over_the_ceiling_is_rejected(self):
+        with patch.dict("os.environ", _env(CLEANUP_INTERVAL_HOURS="87601"), clear=True):
+            with pytest.raises(ConfigError, match="must be <="):
+                Config.from_env()
+
 
 # ---------------------------------------------------------------------------
 # REQUEST_DELAY_SECONDS validation
@@ -352,6 +362,13 @@ class TestRequestDelay:
     def test_the_ceiling_itself_is_accepted(self):
         with patch.dict("os.environ", _env(REQUEST_DELAY_SECONDS="3600"), clear=True):
             assert Config.from_env().request_delay_seconds == 3600.0
+
+    def test_just_over_the_ceiling_is_rejected(self):
+        """Pins the boundary from above too. Asserting only that 3600 is accepted lets
+        the constant be raised with the suite still green, while README publishes 3600."""
+        with patch.dict("os.environ", _env(REQUEST_DELAY_SECONDS="3601"), clear=True):
+            with pytest.raises(ConfigError, match="must be <="):
+                Config.from_env()
 
     @pytest.mark.parametrize("raw", ["nan", "NaN", "inf", "-inf", "infinity", "1e999"])
     def test_non_finite_raises(self, raw):

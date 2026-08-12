@@ -495,13 +495,22 @@ class TestParseRetryAfter:
         """This value is server-controlled, so no operator typo is needed to reach it.
         Unclamped, `Retry-After: 86400` means 24 hours inside an uninterruptible
         time.sleep — and the shutdown flag is only checked between operations, so the
-        container ignores SIGTERM for the duration."""
+        container ignores SIGTERM for the duration.
+
+        Asserted against the literal 300, not against _MAX_RETRY_AFTER: a constant
+        compared to itself pins nothing, and raising it would otherwise pass the suite
+        while README publishes the old number.
+        """
         resp = _rate_limit_response(raw)
-        assert _parse_retry_after(resp) == _MAX_RETRY_AFTER
+        assert _parse_retry_after(resp) == 300
 
     def test_the_ceiling_itself_is_returned_unchanged(self):
-        resp = _rate_limit_response(str(_MAX_RETRY_AFTER))
-        assert _parse_retry_after(resp) == _MAX_RETRY_AFTER
+        resp = _rate_limit_response("300")
+        assert _parse_retry_after(resp) == 300
+
+    def test_the_documented_ceiling_matches_the_constant(self):
+        """The README publishes 300s and a 900s worst case; this is what ties them."""
+        assert _MAX_RETRY_AFTER == 300
 
 
 # ---------------------------------------------------------------------------
@@ -727,6 +736,24 @@ class TestRedirectsAreNotFollowed:
 
         assert exc_info.value.status_code == code
         assert len(_RedirectHandler.seen) == 1
+
+    @pytest.mark.parametrize("verb", ["get", "delete"])
+    def test_the_error_names_the_cause_and_the_fix(self, server, verb):
+        """An http->https hop at an edge proxy is an ordinary deployment, and the base URL
+        still accepts http:// on purpose — so this aborts every cycle, forever. Without a
+        hint the operator sees only `returned 301:` with an empty body in a traceback."""
+        _RedirectHandler.redirect_code = 301
+        client = _make_client(base_url=server, request_delay=0)
+
+        with pytest.raises(APIError) as exc_info:
+            if verb == "get":
+                client.list_groups()
+            else:
+                client.delete_package("g", "p", "pkg")
+
+        message = str(exc_info.value)
+        assert "server redirected to /elsewhere" in message
+        assert "SPECTRA_ASSURE_BASE_URL" in message
 
     def test_the_authorization_header_is_never_forwarded_onward(self, server):
         """requests only strips Authorization when the hostname changes, so a same-host

@@ -1171,17 +1171,63 @@ class TestMalformedListingContainer:
         assert len(record.message) < 400, f"{level} site is not truncated"
         assert "chars)" in record.message
 
-    def test_a_huge_malformed_entry_is_truncated(self, caplog):
+    # One case per level, for the same reason the container sites get one each: a shared
+    # helper is killed by any single caller, so only a per-site test shows a gap. Three of
+    # these four were unpinned when _brief was first applied here.
+    @pytest.mark.parametrize(
+        "marker, fixtures",
+        [
+            ("Malformed group entry", {"list_groups": [{"name": ["x" * 50000]}]}),
+            (
+                "Malformed project entry",
+                {
+                    "list_groups": [{"name": "grp"}],
+                    "list_projects": [{"name": ["x" * 50000]}],
+                },
+            ),
+            (
+                "Malformed package entry",
+                {
+                    "list_groups": [{"name": "grp"}],
+                    "list_projects": [{"name": "proj"}],
+                    "list_packages": [{"name": ["x" * 50000]}],
+                },
+            ),
+            (
+                "Malformed version entry",
+                {
+                    "list_groups": [{"name": "grp"}],
+                    "list_projects": [{"name": "proj"}],
+                    "list_packages": [{"name": "pkg"}],
+                    "list_versions": [{"version": ["x" * 50000]}],
+                },
+            ),
+        ],
+    )
+    def test_a_huge_malformed_entry_is_truncated_at_every_level(self, caplog, marker, fixtures):
         """Entries, not just containers — the per-entry path is the one a genuinely
-        list-shaped hostile response takes."""
+        list-shaped hostile response takes, and it is the unbounded one."""
         client = MagicMock()
-        client.list_groups.return_value = [{"name": ["x" * 50000]}]
+        for name, value in fixtures.items():
+            getattr(client, name).return_value = value
 
         cleaner = _make_cleaner(client=client)
         with caplog.at_level("WARNING"):
             cleaner.run_cycle()
 
-        (record,) = [r for r in caplog.records if "Malformed group entry" in r.message]
+        (record,) = [r for r in caplog.records if marker in r.message]
+        assert len(record.message) < 400, f"{marker} is not truncated"
+
+    def test_a_huge_duplicate_name_is_truncated(self, caplog):
+        client = MagicMock()
+        client.list_groups.return_value = [{"name": "g" * 50000}, {"name": "g" * 50000}]
+        client.list_projects.return_value = []
+
+        cleaner = _make_cleaner(client=client)
+        with caplog.at_level("WARNING"):
+            cleaner.run_cycle()
+
+        (record,) = [r for r in caplog.records if "Duplicate group entry" in r.message]
         assert len(record.message) < 400
 
     def test_a_huge_unparseable_timestamp_is_truncated(self, caplog):
