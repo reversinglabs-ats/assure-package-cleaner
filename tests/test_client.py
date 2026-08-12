@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import json
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -9,6 +12,7 @@ import requests
 
 from assure_package_cleaner.client import (
     _DEFAULT_RETRY_AFTER,
+    _MAX_RETRY_AFTER,
     APIError,
     SpectraClient,
     _parse_retry_after,
@@ -486,6 +490,19 @@ class TestParseRetryAfter:
         resp = _rate_limit_response("300")
         assert _parse_retry_after(resp) == 300
 
+    @pytest.mark.parametrize("raw", ["301", "86400", "99999999999999999999"])
+    def test_oversized_header_is_clamped(self, raw):
+        """This value is server-controlled, so no operator typo is needed to reach it.
+        Unclamped, `Retry-After: 86400` means 24 hours inside an uninterruptible
+        time.sleep — and the shutdown flag is only checked between operations, so the
+        container ignores SIGTERM for the duration."""
+        resp = _rate_limit_response(raw)
+        assert _parse_retry_after(resp) == _MAX_RETRY_AFTER
+
+    def test_the_ceiling_itself_is_returned_unchanged(self):
+        resp = _rate_limit_response(str(_MAX_RETRY_AFTER))
+        assert _parse_retry_after(resp) == _MAX_RETRY_AFTER
+
 
 # ---------------------------------------------------------------------------
 # Rate-limit (429) retry handling
@@ -612,3 +629,113 @@ class TestRateLimitRetry:
             client.delete_package("g", "p", "pkg")
         assert exc_info.value.status_code == 429
         assert mock_delete.call_count == 4
+
+
+# ---------------------------------------------------------------------------
+# Redirects (real HTTP server)
+# ---------------------------------------------------------------------------
+
+
+class _RedirectHandler(BaseHTTPRequestHandler):
+    """Redirects the first hit of any method, then serves a 200/204 at the destination."""
+
+    redirect_code = 302
+    seen: list[str] = []
+
+    def log_message(self, *args):  # keep pytest output clean
+        pass
+
+    def _json(self, code: int, body: object = None):
+        payload = json.dumps(body).encode() if body is not None else b""
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+
+    def _redirect(self):
+        self.send_response(type(self).redirect_code)
+        self.send_header("Location", "/elsewhere")
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def do_GET(self):
+        type(self).seen.append(f"GET {self.path}")
+        if self.path == "/elsewhere":
+            # A different endpoint's perfectly valid body — the dangerous case, since a
+            # foreign analysis.timestamp here would authorize a delete.
+            return self._json(200, {"analysis": {"timestamp": "2020-01-01T00:00:00Z"}})
+        self._redirect()
+
+    def do_DELETE(self):
+        type(self).seen.append(f"DELETE {self.path}")
+        if self.path == "/elsewhere":
+            return self._json(204)
+        self._redirect()
+
+
+class TestRedirectsAreNotFollowed:
+    """The only tests here that exercise requests' real redirect machinery.
+
+    Every other test in this file patches requests.get/.delete at module level, which is
+    structurally incapable of catching this: the mock returns the final response and no
+    redirect logic ever runs. That is why a DELETE silently becoming a GET — package not
+    deleted, `deleted=1 errors=0` logged — was invisible to 68 passing tests.
+    """
+
+    # Module-scoped: HTTPServer.shutdown() waits out serve_forever's poll interval, so a
+    # per-test server would add ~0.5s per case and blow the suite's sub-second budget.
+    @pytest.fixture(scope="class")
+    @classmethod
+    def _server(cls):
+        srv = HTTPServer(("127.0.0.1", 0), _RedirectHandler)
+        thread = threading.Thread(target=srv.serve_forever, daemon=True)
+        thread.start()
+        yield f"http://127.0.0.1:{srv.server_address[1]}"
+        srv.shutdown()
+        srv.server_close()
+        thread.join(timeout=5)
+
+    @pytest.fixture
+    def server(self, _server):
+        _RedirectHandler.seen = []
+        return _server
+
+    @pytest.mark.parametrize("code", [301, 302, 303, 307, 308])
+    def test_a_redirected_delete_raises_instead_of_reporting_success(self, server, code):
+        """On 302/303 requests rewrites DELETE to GET, so the package is never removed
+        while the final 200 reads as success. Every code must fail loudly instead."""
+        _RedirectHandler.redirect_code = code
+        client = _make_client(base_url=server, request_delay=0)
+
+        with pytest.raises(APIError) as exc_info:
+            client.delete_package("g", "p", "pkg")
+
+        assert exc_info.value.status_code == code
+        assert [s.split()[0] for s in _RedirectHandler.seen] == ["DELETE"]
+
+    @pytest.mark.parametrize("code", [301, 302, 303, 307, 308])
+    def test_a_redirected_get_raises_instead_of_parsing_a_foreign_body(self, server, code):
+        """The tail risk: a redirect landing on another JSON endpoint would feed
+        get_version_status a foreign body, and a stale-looking timestamp there authorizes
+        a real delete of a package that was never evaluated."""
+        _RedirectHandler.redirect_code = code
+        client = _make_client(base_url=server, request_delay=0)
+
+        with pytest.raises(APIError) as exc_info:
+            client.get_version_status("g", "p", "pkg", "1.0")
+
+        assert exc_info.value.status_code == code
+        assert len(_RedirectHandler.seen) == 1
+
+    def test_the_authorization_header_is_never_forwarded_onward(self, server):
+        """requests only strips Authorization when the hostname changes, so a same-host
+        http->https hop at a proxy would forward the token. Not following any redirect
+        means the second request never happens."""
+        _RedirectHandler.redirect_code = 307
+        client = _make_client(base_url=server, request_delay=0)
+
+        with pytest.raises(APIError):
+            client.delete_package("g", "p", "pkg")
+
+        assert not any("/elsewhere" in s for s in _RedirectHandler.seen)
