@@ -312,6 +312,17 @@ class TestRequestDelay:
             with pytest.raises(ConfigError, match="must be a number"):
                 Config.from_env()
 
+    @pytest.mark.parametrize("raw", ["nan", "NaN", "inf", "-inf", "infinity"])
+    def test_non_finite_raises(self, raw):
+        """float() accepts all of these and the range check does not reject them —
+        `nan < 0.0` is False. A nan delay then fails `if request_delay > 0` too, so the
+        inter-request pacing silently disappears while the banner logs "Request delay:
+        nans". -inf is caught by the range check; the rest need the finite check.
+        """
+        with patch.dict("os.environ", _env(REQUEST_DELAY_SECONDS=raw), clear=True):
+            with pytest.raises(ConfigError, match="must be a finite number|must be >= 0"):
+                Config.from_env()
+
 
 # ---------------------------------------------------------------------------
 # Config is frozen (immutable)

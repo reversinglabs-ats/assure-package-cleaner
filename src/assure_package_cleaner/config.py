@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import os
 import sys
 from dataclasses import dataclass
@@ -142,6 +143,11 @@ def _parse_float(name: str, default: float, *, minimum: float) -> float:
         value = float(raw)
     except ValueError as exc:
         raise ConfigError(f"{name} must be a number, got: {raw!r}") from exc
+    # Checked before the range test, which both nan and inf slip past: `nan < minimum` is
+    # False. A nan delay then also fails `if self.request_delay > 0`, silently removing
+    # the inter-request pacing while the startup banner reports "Request delay: nans".
+    if not math.isfinite(value):
+        raise ConfigError(f"{name} must be a finite number, got: {raw!r}")
     if value < minimum:
         raise ConfigError(f"{name} must be >= {minimum}, got: {value}")
     return value
