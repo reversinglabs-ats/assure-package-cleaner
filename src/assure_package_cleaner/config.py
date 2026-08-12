@@ -15,6 +15,9 @@ logger = logging.getLogger(__name__)
 # exist only to keep a typo'd value from reaching a C-level conversion that overflows.
 _MAX_THRESHOLD_DAYS = 36_500  # 100 years
 _MAX_INTERVAL_HOURS = 87_600  # 10 years
+_MAX_REQUEST_DELAY = 3_600.0  # 1 hour between calls is already absurd
+
+_VALID_LOG_LEVELS = ("CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG", "NOTSET")
 
 
 class ConfigError(Exception):
@@ -55,8 +58,22 @@ class Config:
         cleanup_interval_hours = _parse_int(
             "CLEANUP_INTERVAL_HOURS", 24, minimum=0, maximum=_MAX_INTERVAL_HOURS
         )
-        request_delay_seconds = _parse_float("REQUEST_DELAY_SECONDS", 0.5, minimum=0.0)
-        log_level = os.environ.get("LOG_LEVEL", "INFO").upper()
+        request_delay_seconds = _parse_float(
+            "REQUEST_DELAY_SECONDS", 0.5, minimum=0.0, maximum=_MAX_REQUEST_DELAY
+        )
+        # Validated here rather than left to basicConfig, which raises a bare ValueError
+        # from __main__ *after* the config gate — a traceback instead of the clean
+        # "Configuration error:" + exit 1 every other bad value gets, and a crashloop
+        # under a Docker restart policy.
+        # Set-but-empty means unset, as it does for the scope variables: `-e LOG_LEVEL=`
+        # and a Compose `${LOG_LEVEL}` that interpolates to nothing must not stop the
+        # container. Unlike the scope vars this needs no warning — the default is not a
+        # widening of what gets deleted.
+        log_level = os.environ.get("LOG_LEVEL", "").strip().upper() or "INFO"
+        if log_level not in _VALID_LOG_LEVELS:
+            raise ConfigError(
+                f"LOG_LEVEL must be one of {', '.join(_VALID_LOG_LEVELS)}, got: {log_level!r}"
+            )
 
         dry_run_raw = os.environ.get("DRY_RUN", "true").strip().lower()
         dry_run = dry_run_raw not in ("false", "0", "no")
@@ -83,7 +100,7 @@ class Config:
         else:
             masked_token = "****"  # nosec B105 — this is a mask, not a password
         logger.info("Configuration:")
-        logger.info("  Base URL:              %s", self.base_url)
+        logger.info("  Base URL:              %s", _mask_userinfo(self.base_url))
         logger.info("  Organization:          %s", self.org)
         logger.info("  API Token:             %s", masked_token)
         logger.info("  Stale threshold:       %d days", self.stale_threshold_days)
@@ -103,7 +120,9 @@ def _parse_base_url(raw: str, *, org_override: str | None = None) -> tuple[str, 
         2. First path segment from URL (e.g. /acme-corp)
         3. Subdomain extraction: first label of hostname, capitalized
     """
-    if not raw.startswith(("http://", "https://")):
+    # Case-insensitive: "HTTPS://host/org" would otherwise be prefixed again, and
+    # urlparse then reads "HTTPS" as the host and the real host as the org.
+    if not raw.lower().startswith(("http://", "https://")):
         raw = "https://" + raw
 
     parsed = urlparse(raw)
@@ -131,6 +150,20 @@ def _parse_base_url(raw: str, *, org_override: str | None = None) -> tuple[str, 
     return base_url, org
 
 
+def _mask_userinfo(url: str) -> str:
+    """Redact any user:password@ in a URL before logging it.
+
+    Credentials embedded in SPECTRA_ASSURE_BASE_URL survive into base_url verbatim. The
+    API token is masked in this same block; this was not.
+    """
+    scheme, sep, rest = url.partition("://")
+    if not sep or "@" not in rest:
+        return url
+    userinfo, _, host = rest.rpartition("@")
+    user, has_pw, _ = userinfo.partition(":")
+    return f"{scheme}://{user}:****@{host}" if has_pw else f"{scheme}://****@{host}"
+
+
 def _parse_int(name: str, default: int, *, minimum: int, maximum: int) -> int:
     raw = os.environ.get(name, "")
     if not raw:
@@ -150,7 +183,7 @@ def _parse_int(name: str, default: int, *, minimum: int, maximum: int) -> int:
     return value
 
 
-def _parse_float(name: str, default: float, *, minimum: float) -> float:
+def _parse_float(name: str, default: float, *, minimum: float, maximum: float) -> float:
     raw = os.environ.get(name, "")
     if not raw:
         return default
@@ -165,6 +198,10 @@ def _parse_float(name: str, default: float, *, minimum: float) -> float:
         raise ConfigError(f"{name} must be a finite number, got: {raw!r}")
     if value < minimum:
         raise ConfigError(f"{name} must be >= {minimum}, got: {value}")
+    # Same reason as _parse_int's ceiling: 1e17 passes isfinite and the minimum, then
+    # OverflowErrors inside time.sleep on every single API call.
+    if value > maximum:
+        raise ConfigError(f"{name} must be <= {maximum}, got: {value}")
     return value
 
 

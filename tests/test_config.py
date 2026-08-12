@@ -337,6 +337,17 @@ class TestRequestDelay:
             with pytest.raises(ConfigError, match="must be a number"):
                 Config.from_env()
 
+    def test_absurdly_large_raises(self):
+        """1e17 passes isfinite and the minimum, then OverflowErrors inside time.sleep on
+        every API call — the crash/sleep/crash loop the _parse_int comment describes."""
+        with patch.dict("os.environ", _env(REQUEST_DELAY_SECONDS="1e17"), clear=True):
+            with pytest.raises(ConfigError, match="must be <="):
+                Config.from_env()
+
+    def test_the_ceiling_itself_is_accepted(self):
+        with patch.dict("os.environ", _env(REQUEST_DELAY_SECONDS="3600"), clear=True):
+            assert Config.from_env().request_delay_seconds == 3600.0
+
     @pytest.mark.parametrize("raw", ["nan", "NaN", "inf", "-inf", "infinity", "1e999"])
     def test_non_finite_raises(self, raw):
         """float() accepts all of these and the range check does not reject them —
@@ -647,3 +658,67 @@ class TestScopingConfig:
             assert "Project scope:         (all)" in output
         finally:
             logger.removeHandler(handler)
+
+
+# ---------------------------------------------------------------------------
+# LOG_LEVEL validation
+# ---------------------------------------------------------------------------
+
+
+class TestLogLevel:
+    @pytest.mark.parametrize("raw", ["debug", "INFO", "Warning", "error", "critical", "notset"])
+    def test_valid_levels_any_case(self, raw):
+        with patch.dict("os.environ", _env(LOG_LEVEL=raw), clear=True):
+            assert Config.from_env().log_level == raw.upper()
+
+    @pytest.mark.parametrize("raw", ["verbose", "trace", "10", ""])
+    def test_invalid_level_is_a_clean_config_error(self, raw):
+        """LOG_LEVEL was the one variable that escaped the config gate: basicConfig raised
+        a bare ValueError from __main__ *after* validation, so an operator got a traceback
+        instead of "Configuration error:" + exit 1 — and a crashloop under a restart policy.
+        """
+        env = _env()
+        env["LOG_LEVEL"] = raw
+        with patch.dict("os.environ", env, clear=True):
+            if raw == "":
+                # Empty means "unset" for this variable, and keeps the INFO default.
+                assert Config.from_env().log_level == "INFO"
+            else:
+                with pytest.raises(ConfigError, match="LOG_LEVEL must be one of"):
+                    Config.from_env()
+
+
+# ---------------------------------------------------------------------------
+# Base URL edge cases
+# ---------------------------------------------------------------------------
+
+
+class TestBaseUrlEdgeCases:
+    @pytest.mark.parametrize("raw", ["HTTPS://my.secure.software/org", "HtTp://localhost:8080/org"])
+    def test_scheme_check_is_case_insensitive(self, raw):
+        """A capitalised scheme used to fail the startswith check, get prefixed again, and
+        leave urlparse reading the scheme as the host: base_url https://HTTPS:/... with
+        the real hostname as the org."""
+        base_url, org = _parse_base_url(raw)
+        assert org == "org"
+        assert "HTTPS" not in base_url and "HtTp" not in base_url
+
+    def test_credentials_are_masked_in_the_log(self, caplog):
+        """The API token is masked in log_settings; a password embedded in the base URL
+        was not, and survives into base_url verbatim."""
+        env = _env(SPECTRA_ASSURE_BASE_URL="https://user:s3cr3t@my.secure.software/acme")
+        with patch.dict("os.environ", env, clear=True):
+            cfg = Config.from_env()
+
+        handler = logging.StreamHandler(io.StringIO())
+        log = logging.getLogger("assure_package_cleaner.config")
+        log.addHandler(handler)
+        log.setLevel(logging.INFO)
+        try:
+            cfg.log_settings()
+            output = handler.stream.getvalue()
+        finally:
+            log.removeHandler(handler)
+
+        assert "s3cr3t" not in output
+        assert "user:****@my.secure.software" in output
