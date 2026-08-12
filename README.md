@@ -44,11 +44,11 @@ All configuration is via environment variables. No config files are needed.
 | `SPECTRA_ASSURE_GROUP` | No | — (all groups) | Comma-separated list of group names to clean. When set, only these groups are walked. See [Scoping](#scoping) |
 | `SPECTRA_ASSURE_PROJECT` | No | — (all projects) | Comma-separated list of project names to clean, matched within each walked group. See [Scoping](#scoping) |
 | `SPECTRA_API_TOKEN` | Yes | — | Personal access token (PAT) for Bearer auth |
-| `STALE_THRESHOLD_DAYS` | No | `180` | Minimum age in days. Packages where every version was last analyzed more than this many days ago are eligible for deletion |
-| `CLEANUP_INTERVAL_HOURS` | No | `24` | Hours between cleanup cycles. Set to `0` for a single run then exit |
+| `STALE_THRESHOLD_DAYS` | No | `180` | Minimum age in days. Packages where every version was last analyzed more than this many days ago are eligible for deletion. Range 1–36500 |
+| `CLEANUP_INTERVAL_HOURS` | No | `24` | Hours between cleanup cycles. Set to `0` for a single run then exit. Max `87600` |
 | `DRY_RUN` | No | `true` | Set to `false`, `0`, or `no` to enable actual deletions. Any other value (including typos) keeps dry-run enabled |
-| `REQUEST_DELAY_SECONDS` | No | `0.5` | Delay in seconds between API calls to avoid overwhelming the portal |
-| `LOG_LEVEL` | No | `INFO` | Python logging level (`DEBUG`, `INFO`, `WARNING`, `ERROR`) |
+| `REQUEST_DELAY_SECONDS` | No | `0.5` | Delay in seconds between API calls to avoid overwhelming the portal. Max `3600` |
+| `LOG_LEVEL` | No | `INFO` | One of `CRITICAL`, `ERROR`, `WARNING`, `INFO`, `DEBUG`, `NOTSET` (any case). An unrecognised value is rejected at startup like any other bad config; empty means unset |
 
 ### Scoping
 
@@ -114,9 +114,16 @@ the presence of a group warning, and the error count together — not the error
 count alone.
 
 Every cycle ends with exactly one summary line, whatever happened, and its first
-words are the status: `Cycle complete`, `Cycle interrupted` (a shutdown arrived
-mid-walk), or `Cycle ABORTED` (something unexpected escaped). Only `Cycle
-complete` means the counts are final.
+words are the status:
+
+- `Cycle complete` — the walk enumerated the org and finished. Only this one means
+  the counts are final.
+- `Cycle interrupted` — a shutdown arrived mid-walk. Counts are partial.
+- `Cycle ABORTED` — the group listing failed or returned something unusable, or an
+  unexpected error escaped. The walk covered nothing or stopped early.
+
+A scheduled run that reports `Cycle ABORTED` on every cycle is the signal that
+stale packages are accumulating untouched.
 
 Note also that an unmatched group filter suppresses the project warnings for
 *every* group, including ones that were fully enumerated. With groups
@@ -197,7 +204,7 @@ The container handles `SIGTERM` and `SIGINT` gracefully — it finishes the curr
 
 It can, however, abandon a package half-*evaluated*. A shutdown arriving mid-version-loop stops after the versions checked so far, and that package is counted in `packages_evaluated` while landing in neither `deleted` nor `skipped`. The summary line reports `Cycle interrupted`, so the counts are readable as partial rather than final.
 
-One case is slower than `docker stop`'s default 10-second grace period: the signal handler only sets a flag, which is checked between operations, so a shutdown that arrives while the client is sleeping off a rate-limit (429) backoff is not noticed until that sleep ends. With three retries at the 60-second default that is up to 180 seconds, and Docker will `SIGKILL` first. That is safe — a kill mid-walk cannot leave a package partly deleted, since deletion is a single API call — but if you stop the container during a rate-limit storm, either pass `docker stop -t 200` or expect the kill. Tracked in [#19](https://github.com/reversinglabs-ats/assure-package-cleaner/issues/19).
+One case is slower than `docker stop`'s default 10-second grace period: the signal handler only sets a flag, which is checked between operations, so a shutdown that arrives while the client is sleeping off a rate-limit (429) backoff is not noticed until that sleep ends. Each wait is capped at 300 seconds regardless of what the server's `Retry-After` header asks for, and with three retries the worst case is 900 seconds. Docker will `SIGKILL` long before that. It is safe — a kill mid-walk cannot leave a package partly deleted, since deletion is a single API call — but if you stop the container during a rate-limit storm, either raise the grace period or expect the kill. Tracked in [#19](https://github.com/reversinglabs-ats/assure-package-cleaner/issues/19).
 
 ### Running directly (without Docker)
 
@@ -233,7 +240,7 @@ pip install -e ".[dev]"
 .venv/bin/ruff format --check .   # check formatting
 .venv/bin/ruff check --no-fix .   # lint
 .venv/bin/mypy src tests          # type check
-.venv/bin/pytest                  # run tests (268 tests, <1s)
+.venv/bin/pytest                  # run tests (307 tests, <1s)
 ```
 
 ### Project layout
