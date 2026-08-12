@@ -109,9 +109,14 @@ filter, which would otherwise make every project warning meaningless.
 An absent warning therefore means "matched" *or* "could not tell", and the two
 are not always distinguishable from the summary line. A group typo plus a
 project typo reports only the group one, with `errors=0`; an interrupted cycle
-reports neither, also with `errors=0`. What tells them apart is the status word
-(`Cycle interrupted`), the presence of a group warning, and the error count
-together — not the error count alone.
+reports neither, also with `errors=0`. What tells them apart is the status word,
+the presence of a group warning, and the error count together — not the error
+count alone.
+
+Every cycle ends with exactly one summary line, whatever happened, and its first
+words are the status: `Cycle complete`, `Cycle interrupted` (a shutdown arrived
+mid-walk), or `Cycle ABORTED` (something unexpected escaped). Only `Cycle
+complete` means the counts are final.
 
 Note also that an unmatched group filter suppresses the project warnings for
 *every* group, including ones that were fully enumerated. With groups
@@ -188,7 +193,9 @@ docker run --rm \
   assure-package-cleaner
 ```
 
-The container handles `SIGTERM` and `SIGINT` gracefully — it finishes the current operation and then exits cleanly, and it never abandons a package half-evaluated.
+The container handles `SIGTERM` and `SIGINT` gracefully — it finishes the current API call and then exits cleanly, and it never *deletes* a half-evaluated package: the shutdown check sits above the delete, so a package whose versions were only partly checked is left alone.
+
+It can, however, abandon a package half-*evaluated*. A shutdown arriving mid-version-loop stops after the versions checked so far, and that package is counted in `packages_evaluated` while landing in neither `deleted` nor `skipped`. The summary line reports `Cycle interrupted`, so the counts are readable as partial rather than final.
 
 One case is slower than `docker stop`'s default 10-second grace period: the signal handler only sets a flag, which is checked between operations, so a shutdown that arrives while the client is sleeping off a rate-limit (429) backoff is not noticed until that sleep ends. With three retries at the 60-second default that is up to 180 seconds, and Docker will `SIGKILL` first. That is safe — a kill mid-walk cannot leave a package partly deleted, since deletion is a single API call — but if you stop the container during a rate-limit storm, either pass `docker stop -t 200` or expect the kill. Tracked in [#19](https://github.com/reversinglabs-ats/assure-package-cleaner/issues/19).
 
@@ -226,7 +233,7 @@ pip install -e ".[dev]"
 .venv/bin/ruff format --check .   # check formatting
 .venv/bin/ruff check --no-fix .   # lint
 .venv/bin/mypy src tests          # type check
-.venv/bin/pytest                  # run tests (233 tests, <1s)
+.venv/bin/pytest                  # run tests (268 tests, <1s)
 ```
 
 ### Project layout
