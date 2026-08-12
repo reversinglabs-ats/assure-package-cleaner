@@ -45,17 +45,44 @@ class Cleaner:
             self.stale_threshold_days,
         )
 
+        # The summary line is the only aggregate an operator gets, and every abort path is
+        # exactly when they need it most. `finally` makes it unconditional — including for
+        # an exception on the way out, which is reported as ABORTED rather than complete.
+        completed = False
+        try:
+            self._walk(cutoff, stats)
+            completed = True
+        finally:
+            if stats.interrupted:
+                status = "Cycle interrupted"
+            elif completed:
+                status = "Cycle complete"
+            else:
+                status = "Cycle ABORTED"
+            logger.info(
+                "%s — deleted=%d skipped=%d errors=%d (groups=%d projects=%d packages=%d)",
+                status,
+                stats.deleted,
+                stats.skipped,
+                stats.errors,
+                stats.groups_processed,
+                stats.projects_processed,
+                stats.packages_evaluated,
+            )
+        return stats
+
+    def _walk(self, cutoff: datetime, stats: CycleStats) -> None:
         try:
             groups = self.client.list_groups()
         except APIError:
             logger.exception("Failed to list groups — aborting cycle")
             stats.errors += 1
-            return stats
+            return
 
         if not isinstance(groups, list):
-            logger.error("Group listing is not a list: %r — aborting cycle", groups)
+            logger.error("Group listing is not a list: %s — aborting cycle", _brief(groups))
             stats.errors += 1
-            return stats
+            return
 
         seen_projects: set[str] = set()
         walked_groups: set[str] = set()
@@ -90,19 +117,6 @@ class Cleaner:
                 walked_groups, seen_projects, groups_fully_listed, projects_fully_listed
             )
 
-        status = "Cycle interrupted" if stats.interrupted else "Cycle complete"
-        logger.info(
-            "%s — deleted=%d skipped=%d errors=%d (groups=%d projects=%d packages=%d)",
-            status,
-            stats.deleted,
-            stats.skipped,
-            stats.errors,
-            stats.groups_processed,
-            stats.projects_processed,
-            stats.packages_evaluated,
-        )
-        return stats
-
     def _process_group(
         self, group: str, cutoff: datetime, stats: CycleStats, seen_projects: set[str]
     ) -> bool:
@@ -116,7 +130,9 @@ class Cleaner:
 
         if not isinstance(projects, list):
             logger.error(
-                "Project listing in group %s is not a list: %r — skipping group", group, projects
+                "Project listing in group %s is not a list: %s — skipping group",
+                group,
+                _brief(projects),
             )
             stats.errors += 1
             return False
@@ -182,10 +198,10 @@ class Cleaner:
 
         if not isinstance(packages, list):
             logger.error(
-                "Package listing in %s/%s is not a list: %r — skipping project",
+                "Package listing in %s/%s is not a list: %s — skipping project",
                 group,
                 project,
-                packages,
+                _brief(packages),
             )
             stats.errors += 1
             return
@@ -245,9 +261,9 @@ class Cleaner:
 
         if not isinstance(versions, list):
             logger.error(
-                "Version listing for %s is not a list: %r — skipping package (fail-safe)",
+                "Version listing for %s is not a list: %s — skipping package (fail-safe)",
                 pkg_path,
-                versions,
+                _brief(versions),
             )
             stats.errors += 1
             return
@@ -355,6 +371,17 @@ class Cleaner:
 
         logger.info("DELETED %s (%d versions)", pkg_path, version_count)
         stats.deleted += 1
+
+
+def _brief(value: object, limit: int = 200) -> str:
+    """repr() a value for a log line, truncated.
+
+    Used only for whole listing payloads. A malformed 50k-entry response is still a
+    malformed response, and dumping the entire structure into one ERROR line buries
+    every other line in the cycle.
+    """
+    text = repr(value)
+    return text if len(text) <= limit else f"{text[:limit]}… ({len(text)} chars)"
 
 
 def _entry_name(entry: object, key: str = "name") -> str | None:

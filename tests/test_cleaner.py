@@ -1036,6 +1036,44 @@ class TestMalformedListingContainer:
         assert stats.errors == 1
         assert stats.groups_processed == 0
 
+    def test_the_summary_line_survives_an_abort(self, caplog):
+        """The summary is the only aggregate an operator gets, and an abort is when they
+        need it most. Pinned separately from the stats because the two early returns in
+        _walk bypassed it before, and nothing in the suite noticed."""
+        client = MagicMock()
+        client.list_groups.return_value = None
+
+        with caplog.at_level("INFO"):
+            _make_cleaner(client=client).run_cycle()
+
+        assert any(
+            "Cycle complete — deleted=0 skipped=0 errors=1" in r.message for r in caplog.records
+        )
+
+    def test_an_unexpected_exception_still_logs_a_summary_marked_aborted(self, caplog):
+        """Defence in depth for the class of bug this whole area is about. If something
+        does escape, the operator still gets the aggregate — and the status word says
+        ABORTED, so a partial walk is never reported as a complete one. The exception is
+        not swallowed.
+        """
+        client = MagicMock()
+        client.list_groups.side_effect = RuntimeError("boom")
+
+        with caplog.at_level("INFO"), pytest.raises(RuntimeError, match="boom"):
+            _make_cleaner(client=client).run_cycle()
+
+        assert any("Cycle ABORTED — deleted=0" in r.message for r in caplog.records)
+
+    def test_the_normal_path_still_says_complete(self, caplog):
+        client = MagicMock()
+        client.list_groups.return_value = []
+
+        with caplog.at_level("INFO"):
+            _make_cleaner(client=client).run_cycle()
+
+        assert any("Cycle complete — deleted=0" in r.message for r in caplog.records)
+        assert not any("ABORTED" in r.message for r in caplog.records)
+
     def test_null_project_listing_does_not_abort_the_cycle(self):
         """The consequence that matters: groups after the bad one still get walked, so a
         single misbehaving group cannot make stale packages immortal across every cycle."""
@@ -1069,6 +1107,23 @@ class TestMalformedListingContainer:
 
         assert stats.errors == 1
         assert not any("proj-x" in r.message for r in caplog.records)
+
+    def test_a_huge_malformed_listing_is_truncated_in_the_log(self, caplog):
+        """A malformed 50k-entry response is still just a malformed response. Dumping the
+        whole structure into one ERROR line buries every other line in the cycle."""
+        client = MagicMock()
+        client.list_groups.return_value = [{"name": "grp"}]
+        # A dict, so it passes _get's guard and reaches the cleaner's isinstance check.
+        client.list_projects.return_value = {"projects": ["x" * 100] * 500}
+
+        cleaner = _make_cleaner(client=client)
+        with caplog.at_level("ERROR"):
+            stats = cleaner.run_cycle()
+
+        assert stats.errors == 1
+        (record,) = [r for r in caplog.records if "is not a list" in r.message]
+        assert len(record.message) < 400
+        assert "chars)" in record.message
 
     def test_null_package_listing_skips_the_project(self):
         client = MagicMock()
