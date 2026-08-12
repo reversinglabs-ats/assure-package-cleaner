@@ -50,6 +50,22 @@ def _parse_retry_after(resp: requests.Response) -> int:
     return _DEFAULT_RETRY_AFTER
 
 
+def _redirect_hint(resp: requests.Response) -> str:
+    """Explain a 3xx, since we deliberately do not follow them.
+
+    Without this the operator sees only `returned 301:` with an empty body inside a
+    traceback, on every cycle, forever — an http->https hop at an edge proxy is an
+    ordinary deployment, and SPECTRA_ASSURE_BASE_URL still accepts http:// on purpose.
+    The cause and the fix both have to be in the message.
+    """
+    location = resp.headers.get("Location") or "(no Location header)"
+    return (
+        f"server redirected to {location}. Redirects are not followed, because a "
+        f"redirected DELETE can silently become a GET and report success without "
+        f"deleting anything. Set SPECTRA_ASSURE_BASE_URL to the final URL."
+    )
+
+
 class APIError(Exception):
     """Raised when the Spectra Assure API returns an error."""
 
@@ -104,6 +120,8 @@ class SpectraClient:
                 url, headers=self._headers(), timeout=30, allow_redirects=False
             ),
         )
+        if 300 <= resp.status_code < 400:
+            raise APIError("DELETE", url, resp.status_code, _redirect_hint(resp))
         if resp.status_code not in (200, 204):
             raise APIError("DELETE", url, resp.status_code, resp.text[:200])
 
@@ -114,6 +132,8 @@ class SpectraClient:
             url,
             lambda: requests.get(url, headers=self._headers(), timeout=30, allow_redirects=False),
         )
+        if 300 <= resp.status_code < 400:
+            raise APIError("GET", url, resp.status_code, _redirect_hint(resp))
         if resp.status_code != 200:
             raise APIError("GET", url, resp.status_code, resp.text[:200])
         try:
