@@ -48,7 +48,7 @@ All configuration is via environment variables. No config files are needed.
 | `CLEANUP_INTERVAL_HOURS` | No | `24` | Hours between cleanup cycles. Set to `0` for a single run then exit. Max `87600` |
 | `DRY_RUN` | No | `true` | Set to `false`, `0`, or `no` to enable actual deletions. Any other value (including typos) keeps dry-run enabled |
 | `REQUEST_DELAY_SECONDS` | No | `0.5` | Delay in seconds between API calls to avoid overwhelming the portal. Max `3600` |
-| `LOG_LEVEL` | No | `INFO` | One of `CRITICAL`, `ERROR`, `WARNING`, `INFO`, `DEBUG`, `NOTSET` (any case). An unrecognised value is rejected at startup like any other bad config; empty means unset |
+| `LOG_LEVEL` | No | `INFO` | Any name `logging` accepts (`CRITICAL`, `FATAL`, `ERROR`, `WARN`, `WARNING`, `INFO`, `DEBUG`, `NOTSET`), any case. An unrecognised value is rejected at startup like any other bad config; empty means unset. **`NOTSET` is not "quiet"** — it means level 0, so everything including `DEBUG` is emitted |
 
 ### Scoping
 
@@ -204,7 +204,7 @@ The container handles `SIGTERM` and `SIGINT` gracefully — it finishes the curr
 
 It can, however, abandon a package half-*evaluated*. A shutdown arriving mid-version-loop stops after the versions checked so far, and that package is counted in `packages_evaluated` while landing in neither `deleted` nor `skipped`. The summary line reports `Cycle interrupted`, so the counts are readable as partial rather than final.
 
-One case is slower than `docker stop`'s default 10-second grace period: the signal handler only sets a flag, which is checked between operations, so a shutdown that arrives while the client is sleeping off a rate-limit (429) backoff is not noticed until that sleep ends. Each wait is capped at 300 seconds regardless of what the server's `Retry-After` header asks for, and with three retries the worst case is 900 seconds. Docker will `SIGKILL` long before that. It is safe — a kill mid-walk cannot leave a package partly deleted, since deletion is a single API call — but if you stop the container during a rate-limit storm, either raise the grace period or expect the kill. Tracked in [#19](https://github.com/reversinglabs-ats/assure-package-cleaner/issues/19).
+One case is slower than `docker stop`'s default 10-second grace period: the signal handler only sets a flag, which is checked between operations, so a shutdown that arrives while the client is sleeping off a rate-limit (429) backoff is not noticed until that sleep ends. Each 429 wait is capped at 300 seconds regardless of what the server's `Retry-After` header asks for, and with three retries that path is worst-case 900 seconds. `REQUEST_DELAY_SECONDS` is a second uninterruptible sleep outside it, capped at 3600, so the true worst case is 4500 seconds — reachable only if you have deliberately set an absurd delay. Docker will `SIGKILL` long before either. It is safe — a kill mid-walk cannot leave a package partly deleted, since deletion is a single API call — but if you stop the container during a rate-limit storm, either raise the grace period or expect the kill. Tracked in [#19](https://github.com/reversinglabs-ats/assure-package-cleaner/issues/19).
 
 ### Running directly (without Docker)
 
@@ -226,6 +226,31 @@ export SPECTRA_API_TOKEN=your-token-here
 python -m assure_package_cleaner
 ```
 
+## Upgrading
+
+Three changes in this release reject configurations that previously started. Each
+one is deliberate — in every case the old behaviour was either already broken or
+silently unsafe — but check these before rolling out:
+
+**Redirects are no longer followed.** If your portal sits behind a proxy that
+redirects (an `http`→`https` hop is the common case), every cycle now aborts with
+`server redirected to <Location>` and deletes nothing. Set
+`SPECTRA_ASSURE_BASE_URL` to the final URL. This is not a regression to work
+around: a redirected `DELETE` is rewritten to `GET` by the HTTP layer, so the old
+behaviour reported `DELETED` for packages it had not deleted.
+
+**Credentials in `SPECTRA_ASSURE_BASE_URL` are rejected.** A `user:password@` in
+the URL made `requests` send `Authorization: Basic` and overwrite the Bearer
+token the API needs, so such a deployment was already failing every request with
+401 — while printing the password into the logs. Remove the userinfo and
+authenticate with `SPECTRA_API_TOKEN`.
+
+**A scope variable that is set but empty is now fatal when `DRY_RUN=false`.**
+`SPECTRA_ASSURE_GROUP=` (or a Compose `${VAR}` that interpolates to nothing) still
+means "no scope, i.e. the whole org" — but combined with live deletion that turns
+a run you meant to scope into an org-wide delete. Unset the variable if you really
+do want to clean the whole org; fix the value otherwise. Dry-run still only warns.
+
 ## Development
 
 Requires Python 3.12+ and a virtual environment.
@@ -240,7 +265,7 @@ pip install -e ".[dev]"
 .venv/bin/ruff format --check .   # check formatting
 .venv/bin/ruff check --no-fix .   # lint
 .venv/bin/mypy src tests          # type check
-.venv/bin/pytest                  # run tests (307 tests, <1s)
+.venv/bin/pytest                  # run tests (335 tests, <1s)
 ```
 
 ### Project layout

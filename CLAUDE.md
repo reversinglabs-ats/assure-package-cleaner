@@ -17,7 +17,7 @@ A Python CLI/Docker tool that automatically deletes stale packages from the Reve
 # Type check
 .venv/bin/mypy src tests
 
-# Run tests (307 tests, should complete in <1s)
+# Run tests (335 tests, should complete in <1s)
 .venv/bin/pytest
 
 # Run the app locally (requires env vars — see below)
@@ -36,9 +36,9 @@ src/assure_package_cleaner/
   client.py          # SpectraClient: thin HTTP wrapper over the portal API
   cleaner.py         # Cleaner.run_cycle(): the group→project→package→version walk
 tests/
-  test_config.py     # 101 tests — env var parsing, validation, defaults, scoping
-  test_client.py     # 83 tests — API methods, errors, auth, delay
-  test_cleaner.py    # 116 tests — staleness logic, short-circuit, fail-safe, dry-run, scoping
+  test_config.py     # 122 tests — env var parsing, validation, defaults, scoping
+  test_client.py     # 86 tests — API methods, errors, auth, delay
+  test_cleaner.py    # 120 tests — staleness logic, short-circuit, fail-safe, dry-run, scoping
   test_main.py       # 7 tests  — config → cleaner/client wiring (dry_run and scope must survive it)
 Dockerfile           # Multi-stage Chainguard build
 ```
@@ -117,5 +117,8 @@ No pagination. Auth is `Authorization: Bearer <token>`.
 - **Every request sets `allow_redirects=False`.** The portal API has fixed, fully-specified paths and never redirects, and following one is unsafe in both directions. On a DELETE, `requests` rewrites the method to `GET` for 302/303, so the package is never removed while the final 200 reads as success — `deleted=1 errors=0` logged with nothing deleted, and no line distinguishing it from a working run. On a GET, a redirect onto another JSON endpoint feeds `get_version_status` a foreign body, and a stale-looking `analysis.timestamp` there authorizes a real delete of a package that was never evaluated. The `Authorization` header also survives a same-host hop (`requests` only strips it when the hostname changes). Pinned by `TestRedirectsAreNotFollowed`.
 - **That test class runs a real `http.server`, and it is the only one that does.** Every other client test patches `requests.get`/`.delete` at module level, which is structurally incapable of catching redirect behaviour — the mock returns the final response and no redirect logic ever runs. When a defect lives in the HTTP library's behaviour rather than ours, module-level patching cannot see it. Keep the server fixture class-scoped: `HTTPServer.shutdown()` waits out `serve_forever`'s poll interval, and a per-test server costs ~0.5s each.
 - The summary line's **status word is a contract**, not decoration: `Cycle complete` only when the walk enumerated groups and finished, `Cycle interrupted` for a shutdown, `Cycle ABORTED` when an exception escaped or `_walk` returned early. `README.md` tells operators to read it, and a cycle that walked nothing must never say `complete` — that is worse than the no-line-at-all it replaced, because a scheduler watching for a missing line would stop seeing one. An exception outranks the interrupt flag. All three arms are pinned; before this they were not, and deleting the `interrupted` arm passed the whole suite.
-- Mutating a shared helper's body tests the helper, not its call sites. `_brief` had four call sites and one covered them all for mutation purposes, while three were individually revertible with the suite still green. When a helper is applied at N sites, the test has to exercise each site.
+- Mutating a shared helper's body tests the helper, not its call sites. `_brief` has ten call sites; mutating its body is killed by any one of them. **Every site needs its own test**, and the rule was written down after three sites were unpinned — then three *more* shipped unpinned in the very next commit, because the rule was recorded without auditing the existing sites against it. When adding a call, add its test in the same edit.
+- A constant compared against itself pins nothing. `assert _parse_retry_after(r) == _MAX_RETRY_AFTER` passes for any value of the constant, so raising a ceiling stays green while the README publishes the old number. Assert the **literal**, and pin the boundary from both sides (the ceiling accepted, ceiling+1 rejected).
+- **Validation must not be stricter than the thing it stands in for.** `_VALID_LOG_LEVELS` was hand-written and omitted `WARN` and `FATAL`, which `logging` accepts — turning `-e LOG_LEVEL=WARN` into an exit-1 crashloop on upgrade, the exact failure the validation was added to prevent. It now derives from `logging.getLevelNamesMapping()`. Where a value is a proxy for another library's accepted set, take the set from that library.
+- Config that *rejects* something previously accepted is a breaking change and needs a README upgrade note. Three exist: redirects, credentials in the base URL, and an empty-but-set scope var under `DRY_RUN=false`. Each was justified by the old behaviour being broken (silent non-deletes, an already-401ing deployment) or silently unsafe (an unrequested org-wide delete) — that bar is what makes the break acceptable, and a change that cannot clear it does not belong.
 - `tests/test_main.py` exists because `__main__` is where `DRY_RUN` and the scope filters meet the `Cleaner`. A wiring slip there is the one class of bug that **over**-deletes, and type checking can't catch it — `target_groups`/`target_projects` are both `frozenset[str]`. Assert kwargs there, not just in `test_config.py`.
