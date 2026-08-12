@@ -6,6 +6,8 @@ import threading
 from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock, call, patch
 
+import pytest
+
 from assure_package_cleaner.cleaner import Cleaner, CycleStats, _extract_timestamp, _parse_timestamp
 from assure_package_cleaner.client import APIError
 
@@ -478,6 +480,13 @@ class TestExtractTimestamp:
 
     def test_timestamp_is_none(self):
         assert _extract_timestamp({"analysis": {"timestamp": None}}) is None
+
+    @pytest.mark.parametrize("payload", [None, [], "x", 7, {"analysis": []}])
+    def test_non_dict_payload_returns_none_instead_of_raising(self, payload):
+        """The container is guarded, not just the values inside it. `_get` returns whatever
+        the endpoint decoded to, so a JSON body of `null`, `[]` or `"x"` reaches here — and
+        an AttributeError would abort the cycle mid-walk, after earlier deletes."""
+        assert _extract_timestamp(payload) is None
 
 
 # ---------------------------------------------------------------------------
@@ -1002,6 +1011,109 @@ class TestMissingKeys:
 
         assert stats.errors == 1
         assert stats.groups_processed == 1
+
+
+# ---------------------------------------------------------------------------
+# Malformed listing *containers* (not entries)
+# ---------------------------------------------------------------------------
+
+
+class TestMalformedListingContainer:
+    """`data.get("groups", [])` defaults only when the key is absent — a present-but-null
+    value returns None, and iterating it raises. That is the same abort-mid-walk failure
+    `_entry_name` exists to prevent, one level out: a package is already permanently
+    deleted, later groups are never walked, no summary line prints, and the exit code
+    still says success. Every listing container is therefore type-checked at its loop,
+    where an error can be counted and the listing marked incomplete.
+    """
+
+    def test_null_group_listing_aborts_without_raising(self):
+        client = MagicMock()
+        client.list_groups.return_value = None
+
+        stats = _make_cleaner(client=client).run_cycle()
+
+        assert stats.errors == 1
+        assert stats.groups_processed == 0
+
+    def test_null_project_listing_does_not_abort_the_cycle(self):
+        """The consequence that matters: groups after the bad one still get walked, so a
+        single misbehaving group cannot make stale packages immortal across every cycle."""
+        client = MagicMock()
+        client.list_groups.return_value = [{"name": "g-a"}, {"name": "g-b"}, {"name": "g-c"}]
+        client.list_projects.side_effect = lambda g: None if g == "g-b" else [{"name": "p"}]
+        client.list_packages.return_value = [{"name": "pkg"}]
+        client.list_versions.return_value = [{"version": "1.0"}]
+        client.get_version_status.return_value = _status_response(_OLD_TIMESTAMP)
+
+        cleaner = _make_cleaner(client=client, dry_run=False)
+        stats = cleaner.run_cycle()
+
+        assert stats.errors == 1
+        assert stats.deleted == 2
+        assert client.delete_package.call_args_list == [
+            call("g-a", "p", "pkg"),
+            call("g-c", "p", "pkg"),
+        ]
+
+    def test_null_project_listing_suppresses_the_project_warning(self, caplog):
+        """Same standing as a listing that failed outright — we cannot conclude anything
+        about a project filter from a container we could not read."""
+        client = MagicMock()
+        client.list_groups.return_value = [{"name": "grp"}]
+        client.list_projects.return_value = None
+
+        cleaner = _make_cleaner(client=client, target_projects=frozenset({"proj-x"}))
+        with caplog.at_level("WARNING"):
+            stats = cleaner.run_cycle()
+
+        assert stats.errors == 1
+        assert not any("proj-x" in r.message for r in caplog.records)
+
+    def test_null_package_listing_skips_the_project(self):
+        client = MagicMock()
+        client.list_groups.return_value = [{"name": "grp"}]
+        client.list_projects.return_value = [{"name": "proj"}]
+        client.list_packages.return_value = None
+
+        cleaner = _make_cleaner(client=client, dry_run=False)
+        stats = cleaner.run_cycle()
+
+        assert stats.errors == 1
+        assert stats.packages_evaluated == 0
+        client.delete_package.assert_not_called()
+
+    def test_null_version_listing_skips_the_package(self):
+        """Fail-safe: a package whose versions cannot be read is never deleted."""
+        client = MagicMock()
+        client.list_groups.return_value = [{"name": "grp"}]
+        client.list_projects.return_value = [{"name": "proj"}]
+        client.list_packages.return_value = [{"name": "pkg"}]
+        client.list_versions.return_value = None
+
+        cleaner = _make_cleaner(client=client, dry_run=False)
+        stats = cleaner.run_cycle()
+
+        assert stats.errors == 1
+        assert stats.deleted == 0
+        client.delete_package.assert_not_called()
+
+    def test_non_dict_status_payload_skips_the_package(self):
+        """`_get` returns whatever the body decoded to, so a bare `null` reaches
+        _extract_timestamp. It must skip the package, not raise."""
+        client = MagicMock()
+        client.list_groups.return_value = [{"name": "grp"}]
+        client.list_projects.return_value = [{"name": "proj"}]
+        client.list_packages.return_value = [{"name": "pkg"}]
+        client.list_versions.return_value = [{"version": "1.0"}]
+        client.get_version_status.return_value = None
+
+        cleaner = _make_cleaner(client=client, dry_run=False)
+        stats = cleaner.run_cycle()
+
+        assert stats.deleted == 0
+        assert stats.skipped == 1
+        client.delete_package.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

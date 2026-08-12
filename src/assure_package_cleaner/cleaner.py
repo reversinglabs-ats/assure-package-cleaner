@@ -52,6 +52,11 @@ class Cleaner:
             stats.errors += 1
             return stats
 
+        if not isinstance(groups, list):
+            logger.error("Group listing is not a list: %r — aborting cycle", groups)
+            stats.errors += 1
+            return stats
+
         seen_projects: set[str] = set()
         walked_groups: set[str] = set()
         groups_fully_listed = True
@@ -106,6 +111,13 @@ class Cleaner:
             projects = self.client.list_projects(group)
         except APIError:
             logger.exception("Failed to list projects in group %s — skipping group", group)
+            stats.errors += 1
+            return False
+
+        if not isinstance(projects, list):
+            logger.error(
+                "Project listing in group %s is not a list: %r — skipping group", group, projects
+            )
             stats.errors += 1
             return False
 
@@ -168,6 +180,16 @@ class Cleaner:
             stats.errors += 1
             return
 
+        if not isinstance(packages, list):
+            logger.error(
+                "Package listing in %s/%s is not a list: %r — skipping project",
+                group,
+                project,
+                packages,
+            )
+            stats.errors += 1
+            return
+
         # Per project, not per group or per cycle: the same package name in a different
         # project is a different package and must still be evaluated.
         #
@@ -218,6 +240,15 @@ class Cleaner:
             versions = self.client.list_versions(group, project, package)
         except APIError:
             logger.exception("Failed to list versions for %s — skipping package", pkg_path)
+            stats.errors += 1
+            return
+
+        if not isinstance(versions, list):
+            logger.error(
+                "Version listing for %s is not a list: %r — skipping package (fail-safe)",
+                pkg_path,
+                versions,
+            )
             stats.errors += 1
             return
 
@@ -346,7 +377,12 @@ def _entry_name(entry: object, key: str = "name") -> str | None:
     return value
 
 
-def _extract_timestamp(status: dict) -> str | None:
+def _extract_timestamp(status: object) -> str | None:
+    # The whole payload is guarded, not just the values inside it: `_get` returns whatever
+    # the endpoint decoded to, and a JSON body of `null`, `[]` or `"x"` would otherwise
+    # raise AttributeError here and abort the cycle mid-walk.
+    if not isinstance(status, dict):
+        return None
     analysis = status.get("analysis")
     if not isinstance(analysis, dict):
         return None
