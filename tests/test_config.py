@@ -2,11 +2,18 @@
 
 from __future__ import annotations
 
+import io
+import logging
 from unittest.mock import patch
 
 import pytest
 
-from assure_package_cleaner.config import Config, ConfigError, _parse_base_url
+from assure_package_cleaner.config import (
+    _VALID_LOG_LEVELS,
+    Config,
+    ConfigError,
+    _parse_base_url,
+)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -255,6 +262,25 @@ class TestStaleThresholdDays:
             with pytest.raises(ConfigError, match="must be >= 1"):
                 Config.from_env()
 
+    @pytest.mark.parametrize("raw", ["100000000", "999999999999"])
+    def test_absurdly_large_raises(self, raw):
+        """Python ints are unbounded; timedelta(days=...) at the top of run_cycle is not.
+        Accepted here, these reach OverflowError ("date value out of range", then "Python
+        int too large to convert to C int") on every cycle — which in periodic mode is a
+        crash/sleep/crash loop that deletes nothing forever while still exiting 0."""
+        with patch.dict("os.environ", _env(STALE_THRESHOLD_DAYS=raw), clear=True):
+            with pytest.raises(ConfigError, match="must be <="):
+                Config.from_env()
+
+    def test_the_ceiling_itself_is_accepted(self):
+        with patch.dict("os.environ", _env(STALE_THRESHOLD_DAYS="36500"), clear=True):
+            assert Config.from_env().stale_threshold_days == 36500
+
+    def test_just_over_the_ceiling_is_rejected(self):
+        with patch.dict("os.environ", _env(STALE_THRESHOLD_DAYS="36501"), clear=True):
+            with pytest.raises(ConfigError, match="must be <="):
+                Config.from_env()
+
     def test_negative_raises(self):
         with patch.dict("os.environ", _env(STALE_THRESHOLD_DAYS="-5"), clear=True):
             with pytest.raises(ConfigError, match="must be >= 1"):
@@ -288,6 +314,22 @@ class TestCleanupIntervalHours:
             with pytest.raises(ConfigError, match="must be an integer"):
                 Config.from_env()
 
+    def test_absurdly_large_raises(self):
+        """Overflows Event.wait(seconds) in the periodic loop — and that call sits outside
+        __main__'s try/except, so it takes the process down rather than being swallowed."""
+        with patch.dict("os.environ", _env(CLEANUP_INTERVAL_HOURS="999999999999"), clear=True):
+            with pytest.raises(ConfigError, match="must be <="):
+                Config.from_env()
+
+    def test_the_ceiling_itself_is_accepted(self):
+        with patch.dict("os.environ", _env(CLEANUP_INTERVAL_HOURS="87600"), clear=True):
+            assert Config.from_env().cleanup_interval_hours == 87600
+
+    def test_just_over_the_ceiling_is_rejected(self):
+        with patch.dict("os.environ", _env(CLEANUP_INTERVAL_HOURS="87601"), clear=True):
+            with pytest.raises(ConfigError, match="must be <="):
+                Config.from_env()
+
 
 # ---------------------------------------------------------------------------
 # REQUEST_DELAY_SECONDS validation
@@ -308,6 +350,40 @@ class TestRequestDelay:
     def test_non_numeric_raises(self):
         with patch.dict("os.environ", _env(REQUEST_DELAY_SECONDS="fast"), clear=True):
             with pytest.raises(ConfigError, match="must be a number"):
+                Config.from_env()
+
+    def test_absurdly_large_raises(self):
+        """1e17 passes isfinite and the minimum, then OverflowErrors inside time.sleep on
+        every API call — the crash/sleep/crash loop the _parse_int comment describes."""
+        with patch.dict("os.environ", _env(REQUEST_DELAY_SECONDS="1e17"), clear=True):
+            with pytest.raises(ConfigError, match="must be <="):
+                Config.from_env()
+
+    def test_the_ceiling_itself_is_accepted(self):
+        with patch.dict("os.environ", _env(REQUEST_DELAY_SECONDS="3600"), clear=True):
+            assert Config.from_env().request_delay_seconds == 3600.0
+
+    def test_just_over_the_ceiling_is_rejected(self):
+        """Pins the boundary from above too. Asserting only that 3600 is accepted lets
+        the constant be raised with the suite still green, while README publishes 3600."""
+        with patch.dict("os.environ", _env(REQUEST_DELAY_SECONDS="3601"), clear=True):
+            with pytest.raises(ConfigError, match="must be <="):
+                Config.from_env()
+
+    @pytest.mark.parametrize("raw", ["nan", "NaN", "inf", "-inf", "infinity", "1e999"])
+    def test_non_finite_raises(self, raw):
+        """float() accepts all of these and the range check does not reject them —
+        `nan < 0.0` is False. A nan delay then fails `if request_delay > 0` too, so the
+        inter-request pacing silently disappears while the banner logs "Request delay:
+        nans".
+
+        The match is deliberately narrow. `isfinite` runs before the range check, so
+        every value here — `-inf` included — must produce the *finite* error. Accepting
+        "must be >= 0" as well would let the `-inf` case pass on the range check alone
+        and stop discriminating against removal of the finite check.
+        """
+        with patch.dict("os.environ", _env(REQUEST_DELAY_SECONDS=raw), clear=True):
+            with pytest.raises(ConfigError, match="must be a finite number"):
                 Config.from_env()
 
 
@@ -373,9 +449,6 @@ class TestTokenMasking:
         with patch.dict("os.environ", _env(), clear=True):
             cfg = Config.from_env()
         # Token is "tok_1234567890abcdef" (20 chars) -> should show first 4 + **** + last 4
-        import io
-        import logging
-
         handler = logging.StreamHandler(io.StringIO())
         logger = logging.getLogger("assure_package_cleaner.config")
         logger.addHandler(handler)
@@ -399,9 +472,6 @@ class TestTokenMasking:
             clear=True,
         ):
             cfg = Config.from_env()
-
-        import io
-        import logging
 
         handler = logging.StreamHandler(io.StringIO())
         logger = logging.getLogger("assure_package_cleaner.config")
@@ -463,3 +533,278 @@ class TestSpectraAssureOrg:
         with patch.dict("os.environ", env, clear=True):
             cfg = Config.from_env()
         assert cfg.org == "acme-corp"
+
+
+# ---------------------------------------------------------------------------
+# Group/project scoping
+# ---------------------------------------------------------------------------
+
+
+class TestScopingConfig:
+    def test_defaults_are_empty(self):
+        with patch.dict("os.environ", _env(), clear=True):
+            cfg = Config.from_env()
+        assert cfg.target_groups == frozenset()
+        assert cfg.target_projects == frozenset()
+
+    def test_group_single_value(self):
+        with patch.dict("os.environ", _env(SPECTRA_ASSURE_GROUP="grp"), clear=True):
+            cfg = Config.from_env()
+        assert cfg.target_groups == frozenset({"grp"})
+
+    def test_group_comma_list(self):
+        with patch.dict("os.environ", _env(SPECTRA_ASSURE_GROUP="a,b,c"), clear=True):
+            cfg = Config.from_env()
+        assert cfg.target_groups == frozenset({"a", "b", "c"})
+
+    def test_group_whitespace_stripped(self):
+        with patch.dict("os.environ", _env(SPECTRA_ASSURE_GROUP="a, b , c"), clear=True):
+            cfg = Config.from_env()
+        assert cfg.target_groups == frozenset({"a", "b", "c"})
+
+    def test_group_empty_elements_dropped(self):
+        with patch.dict("os.environ", _env(SPECTRA_ASSURE_GROUP="a,,b,"), clear=True):
+            cfg = Config.from_env()
+        assert cfg.target_groups == frozenset({"a", "b"})
+
+    def test_group_only_commas_is_empty(self):
+        with patch.dict("os.environ", _env(SPECTRA_ASSURE_GROUP=" , , "), clear=True):
+            cfg = Config.from_env()
+        assert cfg.target_groups == frozenset()
+
+    def test_set_but_empty_warns(self, capsys):
+        with patch.dict("os.environ", _env(SPECTRA_ASSURE_GROUP=" , , "), clear=True):
+            cfg = Config.from_env()
+        assert cfg.target_groups == frozenset()
+        assert "SPECTRA_ASSURE_GROUP is set but contains no usable names" in capsys.readouterr().err
+
+    def test_group_set_to_empty_string_warns(self, capsys):
+        """`-e SPECTRA_ASSURE_GROUP=` must not silently widen the walk to the whole org."""
+        with patch.dict("os.environ", _env(SPECTRA_ASSURE_GROUP=""), clear=True):
+            cfg = Config.from_env()
+        assert cfg.target_groups == frozenset()
+        assert "SPECTRA_ASSURE_GROUP is set but contains no usable names" in capsys.readouterr().err
+
+    def test_project_set_to_empty_string_warns(self, capsys):
+        with patch.dict("os.environ", _env(SPECTRA_ASSURE_PROJECT=""), clear=True):
+            cfg = Config.from_env()
+        assert cfg.target_projects == frozenset()
+        assert (
+            "SPECTRA_ASSURE_PROJECT is set but contains no usable names" in capsys.readouterr().err
+        )
+
+    @pytest.mark.parametrize("var", ["SPECTRA_ASSURE_GROUP", "SPECTRA_ASSURE_PROJECT"])
+    @pytest.mark.parametrize("raw", ["", " , , ", "   "])
+    def test_set_but_empty_is_fatal_under_dry_run_false(self, var, raw):
+        """The warning above is the right call in dry-run, where the cost is a misleading
+        report. Under DRY_RUN=false the same value turns a scoped run into a live
+        org-wide deletion the operator never asked for — from a variable whose whole
+        purpose was to narrow it. README already said to stop the run on this warning.
+
+        Breaking on upgrade is the point: the alternative is deleting the whole org.
+        """
+        env = _env(DRY_RUN="false")
+        env[var] = raw
+        with patch.dict("os.environ", env, clear=True):
+            with pytest.raises(ConfigError, match="contains no usable names"):
+                Config.from_env()
+
+    @pytest.mark.parametrize("var", ["SPECTRA_ASSURE_GROUP", "SPECTRA_ASSURE_PROJECT"])
+    def test_unset_is_still_fine_under_dry_run_false(self, var):
+        """Unset still means the whole org — the documented default, and the only way to
+        clean org-wide on purpose. Only set-but-empty is the ambiguous case."""
+        with patch.dict("os.environ", _env(DRY_RUN="false"), clear=True):
+            cfg = Config.from_env()
+        assert cfg.target_groups == frozenset()
+        assert cfg.target_projects == frozenset()
+
+    def test_a_usable_value_is_unaffected_under_dry_run_false(self):
+        with patch.dict(
+            "os.environ", _env(DRY_RUN="false", SPECTRA_ASSURE_GROUP="grp-a"), clear=True
+        ):
+            assert Config.from_env().target_groups == frozenset({"grp-a"})
+
+    def test_group_and_project_are_not_transposed(self):
+        with patch.dict(
+            "os.environ",
+            _env(SPECTRA_ASSURE_GROUP="grp-a", SPECTRA_ASSURE_PROJECT="proj-x"),
+            clear=True,
+        ):
+            cfg = Config.from_env()
+        assert cfg.target_groups == frozenset({"grp-a"})
+        assert cfg.target_projects == frozenset({"proj-x"})
+
+    def test_unset_does_not_warn(self, capsys):
+        with patch.dict("os.environ", _env(), clear=True):
+            Config.from_env()
+        assert "no usable names" not in capsys.readouterr().err
+
+    def test_warning_survives_logging_being_silenced(self, capsys):
+        """The warning must not be suppressible by logging config — it is the only
+        signal that a malformed scope var widened the walk to the whole org.
+
+        Setting LOG_LEVEL would prove nothing here: from_env() only parses it into a
+        string, and basicConfig runs later in main(). Silence logging for real instead.
+        """
+        root = logging.getLogger()
+        handler = logging.StreamHandler(io.StringIO())
+        root.addHandler(handler)
+        original_level = root.level
+        root.setLevel(logging.ERROR)
+        logging.disable(logging.CRITICAL)
+        try:
+            with patch.dict("os.environ", _env(SPECTRA_ASSURE_GROUP=""), clear=True):
+                Config.from_env()
+        finally:
+            logging.disable(logging.NOTSET)
+            root.setLevel(original_level)
+            root.removeHandler(handler)
+
+        captured = capsys.readouterr()
+        assert "no usable names" in captured.err
+        assert captured.out == ""
+        # Nothing reached the logging machinery, so nothing could have filtered it.
+        assert handler.stream.getvalue() == ""
+
+    def test_project_comma_list(self):
+        with patch.dict("os.environ", _env(SPECTRA_ASSURE_PROJECT="p1,p2"), clear=True):
+            cfg = Config.from_env()
+        assert cfg.target_projects == frozenset({"p1", "p2"})
+
+    def test_project_unset_is_empty(self):
+        with patch.dict("os.environ", _env(), clear=True):
+            cfg = Config.from_env()
+        assert cfg.target_projects == frozenset()
+
+    def test_log_settings_shows_scope(self):
+        with patch.dict(
+            "os.environ",
+            _env(SPECTRA_ASSURE_GROUP="grp-a", SPECTRA_ASSURE_PROJECT="proj-x"),
+            clear=True,
+        ):
+            cfg = Config.from_env()
+
+        handler = logging.StreamHandler(io.StringIO())
+        logger = logging.getLogger("assure_package_cleaner.config")
+        logger.addHandler(handler)
+        logger.setLevel(logging.INFO)
+        try:
+            cfg.log_settings()
+            output = handler.stream.getvalue()
+            assert "grp-a" in output
+            assert "proj-x" in output
+        finally:
+            logger.removeHandler(handler)
+
+    def test_log_settings_shows_all_when_unscoped(self):
+        with patch.dict("os.environ", _env(), clear=True):
+            cfg = Config.from_env()
+
+        handler = logging.StreamHandler(io.StringIO())
+        logger = logging.getLogger("assure_package_cleaner.config")
+        logger.addHandler(handler)
+        logger.setLevel(logging.INFO)
+        try:
+            cfg.log_settings()
+            output = handler.stream.getvalue()
+            assert "Group scope:           (all)" in output
+            assert "Project scope:         (all)" in output
+        finally:
+            logger.removeHandler(handler)
+
+
+# ---------------------------------------------------------------------------
+# LOG_LEVEL validation
+# ---------------------------------------------------------------------------
+
+
+class TestLogLevel:
+    @pytest.mark.parametrize(
+        "raw",
+        ["debug", "INFO", "Warning", "error", "critical", "notset", "WARN", "warn", "FATAL"],
+    )
+    def test_valid_levels_any_case(self, raw):
+        """WARN and FATAL are the ones that matter here. A hand-written allowlist omitted
+        both — logging accepts them, so `-e LOG_LEVEL=WARN` was a working deployment that
+        validation turned into an exit-1 crashloop on every start."""
+        with patch.dict("os.environ", _env(LOG_LEVEL=raw), clear=True):
+            assert Config.from_env().log_level == raw.upper()
+
+    def test_the_allowlist_is_exactly_what_logging_accepts(self):
+        """Derived, not hand-listed: anything basicConfig would take must pass the gate,
+        or validation is stricter than the thing it stands in for."""
+        assert set(_VALID_LOG_LEVELS) == set(logging.getLevelNamesMapping())
+
+    @pytest.mark.parametrize("raw", ["verbose", "trace", "10", ""])
+    def test_invalid_level_is_a_clean_config_error(self, raw):
+        """LOG_LEVEL was the one variable that escaped the config gate: basicConfig raised
+        a bare ValueError from __main__ *after* validation, so an operator got a traceback
+        instead of "Configuration error:" + exit 1 — and a crashloop under a restart policy.
+        """
+        env = _env()
+        env["LOG_LEVEL"] = raw
+        with patch.dict("os.environ", env, clear=True):
+            if raw == "":
+                # Empty means "unset" for this variable, and keeps the INFO default.
+                assert Config.from_env().log_level == "INFO"
+            else:
+                with pytest.raises(ConfigError, match="LOG_LEVEL must be one of"):
+                    Config.from_env()
+
+
+# ---------------------------------------------------------------------------
+# Base URL edge cases
+# ---------------------------------------------------------------------------
+
+
+class TestBaseUrlEdgeCases:
+    @pytest.mark.parametrize("raw", ["HTTPS://my.secure.software/org", "HtTp://localhost:8080/org"])
+    def test_scheme_check_is_case_insensitive(self, raw):
+        """A capitalised scheme used to fail the startswith check, get prefixed again, and
+        leave urlparse reading the scheme as the host: base_url https://HTTPS:/... with
+        the real hostname as the org."""
+        base_url, org = _parse_base_url(raw)
+        assert org == "org"
+        assert "HTTPS" not in base_url and "HtTp" not in base_url
+
+    @pytest.mark.parametrize(
+        "raw",
+        [
+            "https://svcacct:hunter2@my.secure.software/acme",
+            "https://tokenonly@my.secure.software/acme",
+            "http://u:p@localhost:8080/acme",
+        ],
+    )
+    def test_credentials_in_the_url_are_rejected(self, raw):
+        """Rejected, not masked. base_url reaches three log sites — log_settings, every
+        client DEBUG line, and every APIError message (which surfaces at the default INFO
+        level via logger.exception) — and masking each is whack-a-mole. Masking only the
+        first is what the previous version of this test certified as complete.
+
+        Rejecting cannot break a working deployment: requests builds a Basic header from
+        the userinfo and overwrites the Bearer token the API needs, so such a URL is
+        already 401-ing.
+        """
+        with patch.dict("os.environ", _env(SPECTRA_ASSURE_BASE_URL=raw), clear=True):
+            with pytest.raises(ConfigError, match="must not contain credentials"):
+                Config.from_env()
+
+    def test_no_log_line_can_carry_a_password(self):
+        """The property the rejection buys, asserted directly against base_url."""
+        with patch.dict("os.environ", _env(), clear=True):
+            cfg = Config.from_env()
+        assert "@" not in cfg.base_url
+
+    @pytest.mark.parametrize(
+        "raw, expected",
+        [
+            ("https://[2001:db8::1]:8443/acme", "https://[2001:db8::1]:8443/api/public/v1"),
+            ("https://[2001:db8::1]/acme", "https://[2001:db8::1]/api/public/v1"),
+        ],
+    )
+    def test_ipv6_literals_keep_their_brackets(self, raw, expected):
+        """base_url is built from netloc rather than rebuilt from parsed.hostname, which
+        would drop the brackets and yield an unparseable https://2001:db8::1:8443/… ."""
+        base_url, org = _parse_base_url(raw)
+        assert base_url == expected
+        assert org == "acme"

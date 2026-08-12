@@ -25,7 +25,7 @@ def main() -> None:
     try:
         cfg = Config.from_env()
     except ConfigError as exc:
-        print(f"Configuration error: {exc}", file=sys.stderr)  # noqa: T201
+        print(f"Configuration error: {exc}", file=sys.stderr)
         sys.exit(1)
 
     logging.basicConfig(
@@ -50,6 +50,8 @@ def main() -> None:
         stale_threshold_days=cfg.stale_threshold_days,
         dry_run=cfg.dry_run,
         shutdown=_shutdown,
+        target_groups=cfg.target_groups,
+        target_projects=cfg.target_projects,
     )
 
     if cfg.cleanup_interval_hours == 0:

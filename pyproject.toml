@@ -27,6 +27,11 @@ assure-package-cleaner = "assure_package_cleaner.__main__:main"
 target-version = "py312"
 line-length = 100
 src = ["src", "tests"]
+# The explicit `select` below pins which lint rules run, but not which files the
+# *formatter* walks. 0.16 began formatting Python blocks inside Markdown, so
+# `ruff format --check .` covered 9 files on 0.15.22 and 11 on 0.16.2 — and CI floats
+# to whatever pip resolves. Excluding Markdown keeps that surface fixed too.
+extend-exclude = ["*.md"]
 
 [tool.ruff.format]
 quote-style = "double"
@@ -34,7 +39,16 @@ indent-style = "space"
 docstring-code-format = true
 
 [tool.ruff.lint]
-extend-select = [
+# An explicit `select`, not `extend-select`. `extend-select` adds to whatever ruff's
+# default rule set happens to be, so a ruff release that widens the defaults silently
+# widens our lint surface — that is what broke CI and forced the <0.16 pin. Listing the
+# rules outright makes the surface deterministic across versions; adopting a new rule
+# family is now a deliberate edit here.
+select = [
+  "E4",   # pycodestyle — ruff's default subset
+  "E7",
+  "E9",
+  "F",    # pyflakes
   "I",    # isort
   "UP",   # pyupgrade
   "B",    # bugbear

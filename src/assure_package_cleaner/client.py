@@ -15,19 +15,55 @@ logger = logging.getLogger(__name__)
 
 _MAX_RETRIES = 3
 _DEFAULT_RETRY_AFTER = 60  # seconds; aligns with burst-limit window
+_MAX_RETRY_AFTER = 300  # ceiling on a server-supplied Retry-After
+
+# Every request sets allow_redirects=False. The portal API has fixed, fully-specified
+# paths and has no reason to redirect, and following one is unsafe in both directions:
+#
+#   - DELETE: requests rewrites the method to GET on 302/303, so the package is never
+#     deleted, while the final 200 reads as success — `deleted=1 errors=0` with nothing
+#     removed, and no log line distinguishing it from a working run.
+#   - GET: a redirect landing on any other JSON endpoint feeds get_version_status a
+#     foreign body, and a stale-looking analysis.timestamp there authorizes a real
+#     delete of a package that was never evaluated.
+#
+# The Authorization header also survives a same-host redirect (requests only strips it
+# when the hostname changes), so an http->https hop at a proxy forwards the token.
+# With redirects off, a 3xx simply fails the status check and becomes an APIError.
 
 
 def _parse_retry_after(resp: requests.Response) -> int:
-    """Extract Retry-After seconds from response, with fallback."""
+    """Extract Retry-After seconds from response, with fallback.
+
+    Clamped, because this value is *server*-controlled: no operator typo is needed to
+    reach it. `Retry-After: 86400` would otherwise mean 24 hours of uninterruptible
+    time.sleep per attempt, and the shutdown flag is only checked between operations.
+    """
     raw = resp.headers.get("Retry-After")
     if raw is not None:
         try:
             value = int(raw)
             if value > 0:
-                return value
+                return min(value, _MAX_RETRY_AFTER)
         except ValueError:
             pass
     return _DEFAULT_RETRY_AFTER
+
+
+def _redirect_hint(resp: requests.Response) -> str:
+    """Explain a 3xx, since we deliberately do not follow them.
+
+    Without this the operator sees only `returned 301:` with an empty body inside a
+    traceback, on every cycle, forever — an http->https hop at an edge proxy is an
+    ordinary deployment, and SPECTRA_ASSURE_BASE_URL still accepts http:// on purpose.
+    The cause and the fix both have to be in the message.
+    """
+    location = resp.headers.get("Location") or "(no Location header)"
+    return (
+        f"server redirected to {location}. Redirects are not followed, because a "
+        f"redirected DELETE can silently become a GET and report success without "
+        f"deleting anything. Set SPECTRA_ASSURE_BASE_URL to the final URL."
+    )
 
 
 class APIError(Exception):
@@ -78,22 +114,42 @@ class SpectraClient:
             f"/pkg:rl/{self._q(project)}/{self._q(package)}"
         )
         resp = self._with_retry(
-            "DELETE", url, lambda: requests.delete(url, headers=self._headers(), timeout=30)
+            "DELETE",
+            url,
+            lambda: requests.delete(
+                url, headers=self._headers(), timeout=30, allow_redirects=False
+            ),
         )
+        if 300 <= resp.status_code < 400:
+            raise APIError("DELETE", url, resp.status_code, _redirect_hint(resp))
         if resp.status_code not in (200, 204):
             raise APIError("DELETE", url, resp.status_code, resp.text[:200])
 
     def _get(self, path: str) -> dict[str, Any]:
         url = f"{self.base_url}{path}"
         resp = self._with_retry(
-            "GET", url, lambda: requests.get(url, headers=self._headers(), timeout=30)
+            "GET",
+            url,
+            lambda: requests.get(url, headers=self._headers(), timeout=30, allow_redirects=False),
         )
+        if 300 <= resp.status_code < 400:
+            raise APIError("GET", url, resp.status_code, _redirect_hint(resp))
         if resp.status_code != 200:
             raise APIError("GET", url, resp.status_code, resp.text[:200])
         try:
-            return resp.json()
+            data = resp.json()
         except ValueError as exc:
             raise APIError("GET", url, resp.status_code, "Response is not valid JSON") from exc
+        # A bare `null`, `[]`, `"x"` or `42` is valid JSON that decodes cleanly and then
+        # explodes on the `.get()` in every caller below — an AttributeError that no
+        # caller catches, aborting the walk after earlier packages have been deleted.
+        # Raised as APIError so it routes into the error channel that already handles
+        # every other bad response.
+        if not isinstance(data, dict):
+            raise APIError(
+                "GET", url, resp.status_code, f"Response body is not a JSON object: {data!r:.200}"
+            )
+        return data
 
     def _with_retry(
         self,

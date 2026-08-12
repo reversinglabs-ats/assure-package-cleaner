@@ -19,7 +19,7 @@ In no event shall the developer be liable for any direct, indirect, incidental, 
 
 ## How it works
 
-Each cleanup cycle walks the full organization tree: **groups > projects > packages > versions**. For every package, it fetches the analysis timestamp of each version and applies the following rules:
+Each cleanup cycle walks the organization tree: **groups > projects > packages > versions** — the full org by default, or a subset when scoped with `SPECTRA_ASSURE_GROUP` / `SPECTRA_ASSURE_PROJECT` (see [Scoping](#scoping)). For every package, it fetches the analysis timestamp of each version and applies the following rules:
 
 - **A package is deleted only when every version's analysis timestamp is older than the threshold.** This is the core safety rule — if even one version is recent, the entire package is kept.
 - **If any API call fails while evaluating a package, that package is skipped entirely.** The tool never deletes what it cannot fully evaluate.
@@ -41,12 +41,106 @@ All configuration is via environment variables. No config files are needed.
 |----------|----------|---------|-------------|
 | `SPECTRA_ASSURE_BASE_URL` | Yes | — | Portal URL, e.g. `https://my.secure.software/acme-corp`. The org can be in the path, derived from the subdomain, or set explicitly via `SPECTRA_ASSURE_ORG` |
 | `SPECTRA_ASSURE_ORG` | No | — | Override the organization name. When set, the org is not parsed from the URL. Useful for instances like `https://example.secure.software` |
+| `SPECTRA_ASSURE_GROUP` | No | — (all groups) | Comma-separated list of group names to clean. When set, only these groups are walked. See [Scoping](#scoping) |
+| `SPECTRA_ASSURE_PROJECT` | No | — (all projects) | Comma-separated list of project names to clean, matched within each walked group. See [Scoping](#scoping) |
 | `SPECTRA_API_TOKEN` | Yes | — | Personal access token (PAT) for Bearer auth |
-| `STALE_THRESHOLD_DAYS` | No | `180` | Minimum age in days. Packages where every version was last analyzed more than this many days ago are eligible for deletion |
-| `CLEANUP_INTERVAL_HOURS` | No | `24` | Hours between cleanup cycles. Set to `0` for a single run then exit |
+| `STALE_THRESHOLD_DAYS` | No | `180` | Minimum age in days. Packages where every version was last analyzed more than this many days ago are eligible for deletion. Range 1–36500 |
+| `CLEANUP_INTERVAL_HOURS` | No | `24` | Hours between cleanup cycles. Set to `0` for a single run then exit. Max `87600` |
 | `DRY_RUN` | No | `true` | Set to `false`, `0`, or `no` to enable actual deletions. Any other value (including typos) keeps dry-run enabled |
-| `REQUEST_DELAY_SECONDS` | No | `0.5` | Delay in seconds between API calls to avoid overwhelming the portal |
-| `LOG_LEVEL` | No | `INFO` | Python logging level (`DEBUG`, `INFO`, `WARNING`, `ERROR`) |
+| `REQUEST_DELAY_SECONDS` | No | `0.5` | Delay in seconds between API calls to avoid overwhelming the portal. Max `3600` |
+| `LOG_LEVEL` | No | `INFO` | Any name `logging` accepts (`CRITICAL`, `FATAL`, `ERROR`, `WARN`, `WARNING`, `INFO`, `DEBUG`, `NOTSET`), any case. An unrecognised value is rejected at startup like any other bad config; empty means unset. **`NOTSET` is not "quiet"** — it means level 0, so everything including `DEBUG` is emitted |
+
+### Scoping
+
+By default the tool walks every group and project in the organization. Two
+optional variables narrow that walk. They are **independent filters**:
+
+- `SPECTRA_ASSURE_GROUP` restricts which **groups** are walked. Unset = all groups.
+- `SPECTRA_ASSURE_PROJECT` restricts which **projects** are walked, by name,
+  within each walked group. Unset = all projects.
+
+| Env | Meaning |
+|-----|---------|
+| `SPECTRA_ASSURE_GROUP=foo` | Everything in group `foo` |
+| `SPECTRA_ASSURE_GROUP=foo,baz` | Everything in groups `foo` and `baz` |
+| `SPECTRA_ASSURE_GROUP=foo` + `SPECTRA_ASSURE_PROJECT=bar` | Only project `bar` in group `foo` |
+| `SPECTRA_ASSURE_PROJECT=bar` (no group) | Project `bar` in every group that has one |
+| `SPECTRA_ASSURE_GROUP=foo,baz` + `SPECTRA_ASSURE_PROJECT=bar,qux` | Projects `bar`/`qux` wherever they appear in `foo`/`baz` |
+
+Each variable is a comma-separated list; whitespace around each name is
+ignored. Setting `SPECTRA_ASSURE_PROJECT` without `SPECTRA_ASSURE_GROUP`
+matches that project name across all groups.
+
+Names are matched **exactly** against what the API returns — case-sensitive,
+never substring, and sensitive to whitespace and Unicode normalization on the
+API's side (the value you set is stripped, the API's name is not). So
+`SPECTRA_ASSURE_PROJECT=api` scopes to a project named exactly `api`, never to
+`api-legacy` or `internal-api`. A near-miss matches nothing and is reported as
+a typo: **a name that does not match deletes nothing**. Two cases below are the
+exceptions to that — a value that parses to no name at all, and a name
+containing a comma. Both widen the walk rather than narrowing it.
+
+**A name containing a comma cannot be expressed, and the failure is silent.**
+The list is split on `,` with no escape, and the split cannot be told apart
+from an ordinary two-name list. If the halves happen to be real names, the walk
+**widens into groups you never named** — with no warning, because every parsed
+name matched something:
+
+```
+SPECTRA_ASSURE_GROUP="a,b"   # meaning the single group literally named "a,b"
+parsed scope -> a, b         # walks and deletes in groups `a` and `b`
+                             # the group `a,b` is never touched
+```
+
+This is the one case where a filter that is in effect does not fail closed. Such
+a group or project can only be reached by leaving the variable unset and letting
+the walk cover it.
+
+At the end of a cycle, any filter value that matched no group or project is
+logged as a warning, so typos surface quickly. These warnings are per cycle and
+are suppressed where the walk could not establish what exists, to avoid false
+alarms. An interrupted cycle suppresses both levels. A group listing that failed,
+or an unreadable entry in one, also suppresses both — the group a filter names
+may have been the one that could not be read, and its projects were never listed.
+A failed or partly unreadable *project* listing suppresses only the project
+warnings; the group warnings still fire, correctly. So does an unmatched group
+filter, which would otherwise make every project warning meaningless.
+
+An absent warning therefore means "matched" *or* "could not tell", and the two
+are not always distinguishable from the summary line. A group typo plus a
+project typo reports only the group one, with `errors=0`; an interrupted cycle
+reports neither, also with `errors=0`. What tells them apart is the status word,
+the presence of a group warning, and the error count together — not the error
+count alone.
+
+Every cycle ends with exactly one summary line, whatever happened, and its first
+words are the status:
+
+- `Cycle complete` — the walk enumerated the org and finished. Only this one means
+  the counts are final.
+- `Cycle interrupted` — a shutdown arrived mid-walk. Counts are partial.
+- `Cycle ABORTED` — the group listing failed or returned something unusable, or an
+  unexpected error escaped. The walk covered nothing or stopped early.
+
+A scheduled run that reports `Cycle ABORTED` on every cycle is the signal that
+stale packages are accumulating untouched.
+
+Note also that an unmatched group filter suppresses the project warnings for
+*every* group, including ones that were fully enumerated. With groups
+`{team-a, tema-b}` and project `biling`, only the group typo is reported, even
+though `team-a`'s projects were listed and `biling` genuinely matched nothing in
+them. Fix reported typos one at a time and re-run; a clean cycle is the only
+reliable all-clear.
+
+If a scope variable is set but contains no usable name — empty, or only
+whitespace and commas — the tool treats it as unset, meaning **no scope, i.e.
+the whole org**. It keeps the documented "unset = all" default rather than
+inventing a narrower one, so the walk widens instead of narrowing. Unlike the
+comma case above, it is never silent — the tool prints a
+warning to stderr at startup, before logging is configured, so it appears
+regardless of `LOG_LEVEL`. This covers `-e VAR=` and a Compose `${VAR}` that
+interpolates to nothing. Under `DRY_RUN=false`, treat that warning as a reason
+to stop the run.
 
 ## Usage
 
@@ -89,9 +183,28 @@ docker run --rm \
   -e STALE_THRESHOLD_DAYS=365 \
   -e DRY_RUN=false \
   assure-package-cleaner
+
+# Scope to a single group — walk only group "acme-team"
+docker run --rm \
+  -e SPECTRA_ASSURE_BASE_URL=https://my.secure.software/acme-corp \
+  -e SPECTRA_API_TOKEN=your-token-here \
+  -e SPECTRA_ASSURE_GROUP=acme-team \
+  assure-package-cleaner
+
+# Scope to one project in one group
+docker run --rm \
+  -e SPECTRA_ASSURE_BASE_URL=https://my.secure.software/acme-corp \
+  -e SPECTRA_API_TOKEN=your-token-here \
+  -e SPECTRA_ASSURE_GROUP=acme-team \
+  -e SPECTRA_ASSURE_PROJECT=billing-service \
+  assure-package-cleaner
 ```
 
-The container handles `SIGTERM` and `SIGINT` gracefully — it will finish the current operation and then exit cleanly. This means `docker stop` works without forcing a kill.
+The container handles `SIGTERM` and `SIGINT` gracefully — it finishes the current API call and then exits cleanly, and it never *deletes* a half-evaluated package: the shutdown check sits above the delete, so a package whose versions were only partly checked is left alone.
+
+It can, however, abandon a package half-*evaluated*. A shutdown arriving mid-version-loop stops after the versions checked so far, and that package is counted in `packages_evaluated` while landing in neither `deleted` nor `skipped`. The summary line reports `Cycle interrupted`, so the counts are readable as partial rather than final.
+
+One case is slower than `docker stop`'s default 10-second grace period: the signal handler only sets a flag, which is checked between operations, so a shutdown that arrives while the client is sleeping off a rate-limit (429) backoff is not noticed until that sleep ends. Each 429 wait is capped at 300 seconds regardless of what the server's `Retry-After` header asks for, and with three retries that path is worst-case 900 seconds. `REQUEST_DELAY_SECONDS` is a second uninterruptible sleep outside it, capped at 3600, so the true worst case is 4500 seconds — reachable only if you have deliberately set an absurd delay. Docker will `SIGKILL` long before either. It is safe — a kill mid-walk cannot leave a package partly deleted, since deletion is a single API call — but if you stop the container during a rate-limit storm, either raise the grace period or expect the kill. Tracked in [#19](https://github.com/reversinglabs-ats/assure-package-cleaner/issues/19).
 
 ### Running directly (without Docker)
 
@@ -113,6 +226,31 @@ export SPECTRA_API_TOKEN=your-token-here
 python -m assure_package_cleaner
 ```
 
+## Upgrading
+
+Three changes in this release reject configurations that previously started. Each
+one is deliberate — in every case the old behaviour was either already broken or
+silently unsafe — but check these before rolling out:
+
+**Redirects are no longer followed.** If your portal sits behind a proxy that
+redirects (an `http`→`https` hop is the common case), every cycle now aborts with
+`server redirected to <Location>` and deletes nothing. Set
+`SPECTRA_ASSURE_BASE_URL` to the final URL. This is not a regression to work
+around: a redirected `DELETE` is rewritten to `GET` by the HTTP layer, so the old
+behaviour reported `DELETED` for packages it had not deleted.
+
+**Credentials in `SPECTRA_ASSURE_BASE_URL` are rejected.** A `user:password@` in
+the URL made `requests` send `Authorization: Basic` and overwrite the Bearer
+token the API needs, so such a deployment was already failing every request with
+401 — while printing the password into the logs. Remove the userinfo and
+authenticate with `SPECTRA_API_TOKEN`.
+
+**A scope variable that is set but empty is now fatal when `DRY_RUN=false`.**
+`SPECTRA_ASSURE_GROUP=` (or a Compose `${VAR}` that interpolates to nothing) still
+means "no scope, i.e. the whole org" — but combined with live deletion that turns
+a run you meant to scope into an org-wide delete. Unset the variable if you really
+do want to clean the whole org; fix the value otherwise. Dry-run still only warns.
+
 ## Development
 
 Requires Python 3.12+ and a virtual environment.
@@ -127,7 +265,7 @@ pip install -e ".[dev]"
 .venv/bin/ruff format --check .   # check formatting
 .venv/bin/ruff check --no-fix .   # lint
 .venv/bin/mypy src tests          # type check
-.venv/bin/pytest                  # run tests (94 tests, <1s)
+.venv/bin/pytest                  # run tests (335 tests, <1s)
 ```
 
 ### Project layout
@@ -143,6 +281,7 @@ tests/
   test_config.py     # env var parsing, validation, defaults
   test_client.py     # API methods, errors, auth, delays, network exceptions
   test_cleaner.py    # staleness logic, short-circuit, fail-safe, dry-run
+  test_main.py       # config to cleaner wiring
 Dockerfile           # multi-stage Chainguard build
 ```
 
